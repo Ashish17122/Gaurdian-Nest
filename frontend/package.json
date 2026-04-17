@@ -8,7 +8,11 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "lint": "expo lint"
+    "lint": "expo lint",
+    "build:apk": "eas build -p android --profile preview",
+    "build:apk-dev": "eas build -p android --profile development",
+    "build:aab": "eas build -p android --profile production",
+    "build:local": "npx expo prebuild --platform android --clean && cd android && ./gradlew assembleRelease"
   },
   "dependencies": {
     "@babel/runtime": "^7.20.6",
