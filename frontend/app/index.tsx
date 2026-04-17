@@ -1,30 +1,42 @@
-import { Text, View, StyleSheet, Image } from "react-native";
-
-const EXPO_PUBLIC_BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL;
+import React, { useEffect } from "react";
+import { View, Text, ActivityIndicator, StyleSheet } from "react-native";
+import { useRouter } from "expo-router";
+import { api } from "../src/api";
+import { colors } from "../src/theme";
 
 export default function Index() {
-  console.log(EXPO_PUBLIC_BACKEND_URL, "EXPO_PUBLIC_BACKEND_URL");
+  const router = useRouter();
+
+  useEffect(() => {
+    (async () => {
+      // Handle oauth session_id fragment if present (web)
+      if (typeof window !== "undefined" && window.location.hash?.includes("session_id=")) {
+        // Route to auth-callback to exchange
+        router.replace("/auth-callback");
+        return;
+      }
+      try {
+        const me = await api<any>("/auth/me");
+        if (me?.is_admin) router.replace("/admin");
+        else if (me?.role === "child") router.replace("/child");
+        else router.replace("/parent");
+      } catch {
+        router.replace("/role");
+      }
+    })();
+  }, [router]);
 
   return (
-    <View style={styles.container}>
-      <Image
-        source={require("../assets/images/app-image.png")}
-        style={styles.image}
-      />
+    <View style={styles.c} testID="splash-screen">
+      <Text style={styles.brand}>GuardianNest</Text>
+      <Text style={styles.tagline}>Modern parental oversight.</Text>
+      <ActivityIndicator color={colors.primary} style={{ marginTop: 24 }} />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#0c0c0c",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  image: {
-    width: "100%",
-    height: "100%",
-    resizeMode: "contain",
-  },
+  c: { flex: 1, backgroundColor: colors.bg, alignItems: "center", justifyContent: "center", padding: 24 },
+  brand: { fontSize: 34, fontWeight: "800", color: colors.text, letterSpacing: -1 },
+  tagline: { marginTop: 6, color: colors.textSoft, fontSize: 15 },
 });
