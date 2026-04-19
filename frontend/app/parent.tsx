@@ -60,6 +60,26 @@ export default function ParentDashboard() {
 
   useEffect(() => { loadAll(); }, []); // eslint-disable-line
 
+  // Live auto-refresh every 5s (charts + alerts + children status)
+  useEffect(() => {
+    const t = setInterval(async () => {
+      try {
+        const [list, a] = await Promise.all([
+          api<any[]>("/children"),
+          api<any[]>("/alerts"),
+        ]);
+        setChildren(list);
+        setAlerts(a);
+        const currentId = selected?.child_id || list[0]?.child_id;
+        if (currentId) {
+          const s = await api<any>(`/activity/summary/${currentId}?days=7`);
+          setSummary(s);
+        }
+      } catch {}
+    }, 5000);
+    return () => clearInterval(t);
+  }, [selected]);
+
   const selectChild = async (c: any) => {
     setSelected(c);
     const s = await api<any>(`/activity/summary/${c.child_id}?days=7`);

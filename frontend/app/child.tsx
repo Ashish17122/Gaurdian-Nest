@@ -1,74 +1,106 @@
-import React, { useEffect, useState, useRef } from "react";
+import React, { useEffect, useState, useRef, useCallback } from "react";
 import {
   View, Text, StyleSheet, SafeAreaView, TouchableOpacity,
   ScrollView, ActivityIndicator, Modal, TextInput, Alert, Platform, AppState,
+  RefreshControl,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { colors, spacing, radius } from "../src/theme";
-import { Card, Pill } from "../src/ui";
+import { Card } from "../src/ui";
 import { api, setToken } from "../src/api";
+
+type AppKey = "YouTube" | "Instagram" | "Chrome";
+
+const APP_META: Record<AppKey, { color: string; icon: keyof typeof Ionicons.glyphMap }> = {
+  YouTube:   { color: colors.youtube,   icon: "logo-youtube" },
+  Instagram: { color: colors.instagram, icon: "logo-instagram" },
+  Chrome:    { color: colors.chrome,    icon: "logo-chrome" },
+};
+
+function fmt(mins: number) {
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  if (h && m) return `${h}h ${m}m`;
+  if (h) return `${h}h`;
+  return `${m}m`;
+}
 
 export default function ChildScreen() {
   const router = useRouter();
   const [user, setUser] = useState<any>(null);
   const [children, setChildren] = useState<any[]>([]);
-  const [monitoring, setMonitoring] = useState(true);
+  const [summary, setSummary] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [exitModal, setExitModal] = useState(false);
   const [pin, setPin] = useState("");
-  const [elapsed, setElapsed] = useState(0);
   const heartbeatRef = useRef<any>(null);
+  const refreshRef = useRef<any>(null);
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const me = await api<any>("/auth/me");
-        setUser(me);
-        // Use parent-owned devices if parent; child users with no device get a default
-        let list = await api<any[]>("/children").catch(() => []);
-        if (!list.length) {
-          const c = await api<any>("/children/pair", {
-            method: "POST",
-            body: JSON.stringify({ device_name: (me?.name || "Child") + "'s Device" }),
-          });
-          list = [c];
-        }
-        setChildren(list);
-      } catch {
-        router.replace("/role");
-      } finally {
-        setLoading(false);
+  // Initial boot: who am I, which device, ensure it exists
+  const boot = useCallback(async () => {
+    try {
+      const me = await api<any>("/auth/me");
+      setUser(me);
+      let list = await api<any[]>("/children").catch(() => []);
+      if (!list.length) {
+        const c = await api<any>("/children/pair", {
+          method: "POST",
+          body: JSON.stringify({ device_name: (me?.name || "Child") + "'s Device" }),
+        });
+        list = [c];
       }
-    })();
+      setChildren(list);
+      if (list[0]) {
+        const s = await api<any>(`/activity/summary/${list[0].child_id}?days=1`);
+        setSummary(s);
+      }
+    } catch {
+      router.replace("/role");
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
   }, [router]);
 
-  // Heartbeat every 15s + tick elapsed
+  useEffect(() => { boot(); }, [boot]);
+
+  // Heartbeat every 15s so the parent sees this device as ACTIVE
   useEffect(() => {
     const child = children[0];
     if (!child) return;
     const sendBeat = () => {
       api("/monitoring/heartbeat", {
         method: "POST",
-        body: JSON.stringify({ child_id: child.child_id, monitoring_active: monitoring }),
+        body: JSON.stringify({ child_id: child.child_id, monitoring_active: true }),
       }).catch(() => {});
     };
     sendBeat();
-    heartbeatRef.current = setInterval(() => {
-      sendBeat();
-      setElapsed(e => e + 15);
-    }, 15000);
+    heartbeatRef.current = setInterval(sendBeat, 15000);
     return () => clearInterval(heartbeatRef.current);
-  }, [children, monitoring]);
+  }, [children]);
 
-  // Register Expo push token (native only)
+  // Auto-refresh the usage summary every 5s so kid sees live today's time
+  useEffect(() => {
+    const child = children[0];
+    if (!child) return;
+    refreshRef.current = setInterval(async () => {
+      try {
+        const s = await api<any>(`/activity/summary/${child.child_id}?days=1`);
+        setSummary(s);
+      } catch {}
+    }, 5000);
+    return () => clearInterval(refreshRef.current);
+  }, [children]);
+
+  // Native: sticky notification "Monitoring is active"
   useEffect(() => {
     if (Platform.OS === "web") return;
     (async () => {
       try {
         const Notifications = await import("expo-notifications");
         await Notifications.requestPermissionsAsync();
-        // Show a persistent local notification indicating monitoring is active
         await Notifications.scheduleNotificationAsync({
           content: {
             title: "GuardianNest is watching",
@@ -81,10 +113,10 @@ export default function ChildScreen() {
     })();
   }, []);
 
-  // App state alert: if child backgrounds the app
+  // Foreground/background heartbeat so parent knows when app is backgrounded
   useEffect(() => {
-    const sub = AppState.addEventListener("change", (s) => {
-      if (s === "background" && children[0]) {
+    const sub = AppState.addEventListener("change", () => {
+      if (children[0]) {
         api("/monitoring/heartbeat", {
           method: "POST",
           body: JSON.stringify({ child_id: children[0].child_id, monitoring_active: true }),
@@ -94,36 +126,14 @@ export default function ChildScreen() {
     return () => sub.remove();
   }, [children]);
 
-  const logApp = async (app: string) => {
-    if (!children[0]) return;
-    await api("/activity/log", {
-      method: "POST",
-      body: JSON.stringify({
-        child_id: children[0].child_id, app_name: app,
-        duration_seconds: Math.floor(Math.random() * 15 + 5) * 60,
-      }),
-    });
-    Alert.alert("Logged", `${app} usage sent to parent.`);
-  };
-
-  const toggleMonitoring = () => {
-    const next = !monitoring;
-    setMonitoring(next);
-    if (!next && children[0]) {
-      api("/monitoring/heartbeat", {
-        method: "POST",
-        body: JSON.stringify({ child_id: children[0].child_id, monitoring_active: false }),
-      }).catch(() => {});
-      Alert.alert("Alert sent", "Parent has been notified that monitoring was disabled.");
-    }
-  };
-
   const tryExit = async () => {
     try {
       await api("/parent/verify-pin", {
-        method: "POST", body: JSON.stringify({ pin }),
+        method: "POST",
+        body: JSON.stringify({ pin }),
       });
-      setExitModal(false); setPin("");
+      setExitModal(false);
+      setPin("");
       await api("/auth/logout", { method: "POST" }).catch(() => {});
       await setToken(null);
       router.replace("/role");
@@ -132,66 +142,79 @@ export default function ChildScreen() {
     }
   };
 
-  if (loading) return <View style={styles.center}><ActivityIndicator color={colors.primary} /></View>;
+  const onRefresh = () => {
+    setRefreshing(true);
+    boot();
+  };
+
+  if (loading) {
+    return (
+      <View style={styles.center}>
+        <ActivityIndicator color={colors.primary} />
+      </View>
+    );
+  }
+
+  const perApp = summary?.per_app_minutes || {};
+  const totalMins = summary?.total_minutes || 0;
 
   return (
     <SafeAreaView style={styles.safe}>
       {/* Persistent banner */}
-      <View style={[styles.banner, !monitoring && styles.bannerOff]} testID="child-status-banner">
-        <Ionicons
-          name={monitoring ? "shield-checkmark" : "warning"}
-          size={16}
-          color={monitoring ? "#065F46" : "#7F1D1D"}
-        />
-        <Text style={[styles.bannerText, !monitoring && styles.bannerTextOff]}>
-          {monitoring ? "Parental watch is ACTIVE" : "Monitoring is OFF — parent notified"}
-        </Text>
+      <View style={styles.banner} testID="child-status-banner">
+        <Ionicons name="shield-checkmark" size={16} color="#065F46" />
+        <Text style={styles.bannerText}>Parental watch is ACTIVE</Text>
       </View>
 
-      <ScrollView contentContainerStyle={styles.container} testID="child-dashboard">
-        <Text style={styles.label}>CHILD MODE</Text>
+      <ScrollView
+        contentContainerStyle={styles.container}
+        testID="child-dashboard"
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+      >
+        {/* Hero: who's watching */}
+        <Text style={styles.label}>TODAY</Text>
         <Text style={styles.title}>Hi, {user?.name?.split(" ")[0] || "friend"} 👋</Text>
-        <Text style={styles.sub}>Your parent can see your app usage. Be mindful!</Text>
+        <Text style={styles.sub}>Your parent can see your screen time. Live updates every 5 seconds.</Text>
 
-        <Card style={{ marginTop: spacing.lg }}>
-          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.cardTitle}>Monitoring status</Text>
-              <Text style={styles.cardSub}>
-                Heartbeat every 15s · Session: {Math.floor(elapsed / 60)}m {elapsed % 60}s
-              </Text>
-            </View>
-            <Pill
-              text={monitoring ? "ACTIVE" : "DISABLED"}
-              color={monitoring ? colors.success : colors.danger}
-              bg={monitoring ? colors.successBg : colors.dangerBg}
-            />
+        {/* Big total */}
+        <View style={styles.totalCard} testID="child-total-time">
+          <Text style={styles.totalLabel}>TOTAL SCREEN TIME TODAY</Text>
+          <Text style={styles.totalValue}>{fmt(totalMins)}</Text>
+          <View style={styles.liveRow}>
+            <View style={styles.liveDot} />
+            <Text style={styles.liveText}>LIVE</Text>
           </View>
-        </Card>
-
-        <Text style={styles.sectionLabel}>LOG AN APP SESSION</Text>
-        <View style={styles.appRow}>
-          <AppButton name="YouTube" color={colors.youtube} onPress={() => logApp("YouTube")} />
-          <AppButton name="Instagram" color={colors.instagram} onPress={() => logApp("Instagram")} />
-          <AppButton name="Chrome" color={colors.chrome} onPress={() => logApp("Chrome")} />
         </View>
 
-        <Text style={styles.sectionLabel}>ADVANCED</Text>
-        <Card>
-          <Text style={styles.cardTitle}>Disable monitoring (for testing)</Text>
-          <Text style={styles.cardSub}>
-            If you turn this off, your parent will get an immediate alert.
-          </Text>
-          <TouchableOpacity
-            style={[styles.danger, !monitoring && { backgroundColor: colors.success }]}
-            onPress={toggleMonitoring}
-            testID="toggle-monitoring-btn"
-          >
-            <Text style={styles.dangerText}>
-              {monitoring ? "Turn OFF monitoring" : "Turn ON monitoring"}
-            </Text>
-          </TouchableOpacity>
-        </Card>
+        {/* Apps */}
+        <Text style={styles.sectionLabel}>APPS</Text>
+        {(Object.keys(APP_META) as AppKey[]).map((name) => {
+          const mins = perApp[name] || 0;
+          const meta = APP_META[name];
+          const pct = totalMins > 0 ? Math.min(100, Math.round((mins / totalMins) * 100)) : 0;
+          return (
+            <View
+              key={name}
+              style={styles.appRow}
+              testID={`child-app-${name}`}
+            >
+              <View style={[styles.appIcon, { backgroundColor: meta.color }]}>
+                <Ionicons name={meta.icon} size={22} color="#fff" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.appName}>{name}</Text>
+                <View style={styles.barTrack}>
+                  <View style={[styles.barFill, { width: `${pct}%`, backgroundColor: meta.color }]} />
+                </View>
+              </View>
+              <Text style={styles.appMins}>{fmt(mins)}</Text>
+            </View>
+          );
+        })}
+
+        <Text style={styles.reminder}>
+          Take breaks. Be kind online. Your parent is watching because they care.
+        </Text>
 
         <TouchableOpacity
           style={styles.exitBtn}
@@ -210,13 +233,20 @@ export default function ChildScreen() {
             <Text style={styles.modalSub}>Only the parent can disable child mode.</Text>
             <TextInput
               testID="exit-pin-input"
-              style={styles.input} value={pin} onChangeText={setPin}
-              keyboardType="number-pad" secureTextEntry
-              placeholder="••••" placeholderTextColor={colors.textMuted}
+              style={styles.input}
+              value={pin}
+              onChangeText={setPin}
+              keyboardType="number-pad"
+              secureTextEntry
+              placeholder="••••"
+              placeholderTextColor={colors.textMuted}
               maxLength={8}
             />
             <View style={styles.mRow}>
-              <TouchableOpacity style={styles.btnGhost} onPress={() => { setExitModal(false); setPin(""); }}>
+              <TouchableOpacity
+                style={styles.btnGhost}
+                onPress={() => { setExitModal(false); setPin(""); }}
+              >
                 <Text style={{ fontWeight: "600", color: colors.text }}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.btnPrimary} onPress={tryExit} testID="verify-pin-btn">
@@ -230,61 +260,110 @@ export default function ChildScreen() {
   );
 }
 
-function AppButton({ name, color, onPress }: { name: string; color: string; onPress: () => void }) {
-  return (
-    <TouchableOpacity style={styles.appBtn} onPress={onPress} testID={`child-log-${name}-btn`}>
-      <View style={[styles.appIcon, { backgroundColor: color }]}>
-        <Text style={{ color: "#fff", fontWeight: "800" }}>{name[0]}</Text>
-      </View>
-      <Text style={styles.appName}>{name}</Text>
-    </TouchableOpacity>
-  );
-}
-
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.bg },
-  center: { flex: 1, alignItems: "center", justifyContent: "center" },
+  center: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: colors.bg },
   banner: {
     flexDirection: "row", alignItems: "center", gap: 8,
     padding: 12, backgroundColor: colors.successBg,
     borderBottomWidth: 1, borderBottomColor: colors.successBorder,
   },
-  bannerOff: { backgroundColor: colors.dangerBg, borderBottomColor: "#FECACA" },
   bannerText: { color: "#065F46", fontWeight: "700", fontSize: 13 },
-  bannerTextOff: { color: "#7F1D1D" },
   container: { padding: spacing.lg, paddingBottom: spacing.xxl },
-  label: { fontSize: 10, letterSpacing: 1.8, fontWeight: "700", color: colors.textMuted, marginBottom: 6 },
+  label: {
+    fontSize: 10, letterSpacing: 1.8, fontWeight: "700",
+    color: colors.textMuted, marginBottom: 6,
+  },
   title: { fontSize: 30, fontWeight: "800", color: colors.text, letterSpacing: -1 },
-  sub: { color: colors.textSoft, marginTop: 6, fontSize: 14 },
-  cardTitle: { fontSize: 15, fontWeight: "700", color: colors.text },
-  cardSub: { fontSize: 12, color: colors.textSoft, marginTop: 3 },
-  sectionLabel: { fontSize: 10, letterSpacing: 1.8, fontWeight: "700", color: colors.textMuted, marginTop: spacing.xl, marginBottom: spacing.sm },
-  appRow: { flexDirection: "row", gap: 10 },
-  appBtn: {
-    flex: 1, alignItems: "center", padding: spacing.md,
-    borderWidth: 1, borderColor: colors.border, borderRadius: radius.md, backgroundColor: colors.bg,
+  sub: { color: colors.textSoft, marginTop: 6, fontSize: 14, lineHeight: 20 },
+  totalCard: {
+    marginTop: spacing.lg,
+    padding: spacing.lg,
+    borderRadius: radius.md,
+    backgroundColor: colors.brandDeep,
+    alignItems: "flex-start",
   },
-  appIcon: { width: 44, height: 44, borderRadius: 10, alignItems: "center", justifyContent: "center" },
-  appName: { marginTop: 8, fontWeight: "700", color: colors.text, fontSize: 13 },
-  danger: {
-    marginTop: spacing.md, padding: 12, borderRadius: radius.sm,
-    backgroundColor: colors.danger, alignItems: "center",
+  totalLabel: {
+    fontSize: 10, letterSpacing: 1.8, fontWeight: "700",
+    color: "rgba(255,255,255,0.75)",
   },
-  dangerText: { color: "#fff", fontWeight: "700" },
+  totalValue: {
+    marginTop: 8,
+    fontSize: 56,
+    lineHeight: 60,
+    fontWeight: "800",
+    color: "#fff",
+    letterSpacing: -2,
+  },
+  liveRow: {
+    marginTop: 10,
+    flexDirection: "row", alignItems: "center", gap: 6,
+    paddingHorizontal: 10, paddingVertical: 4,
+    backgroundColor: "rgba(255,255,255,0.15)",
+    borderRadius: 999,
+  },
+  liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: "#34D399" },
+  liveText: { color: "#fff", fontSize: 10, fontWeight: "800", letterSpacing: 1.5 },
+  sectionLabel: {
+    fontSize: 10, letterSpacing: 1.8, fontWeight: "700",
+    color: colors.textMuted,
+    marginTop: spacing.xl, marginBottom: spacing.sm,
+  },
+  appRow: {
+    flexDirection: "row", alignItems: "center", gap: 14,
+    padding: spacing.md,
+    backgroundColor: "#fff",
+    borderWidth: 1, borderColor: colors.border,
+    borderRadius: radius.md,
+    marginBottom: 10,
+  },
+  appIcon: {
+    width: 44, height: 44, borderRadius: 10,
+    alignItems: "center", justifyContent: "center",
+  },
+  appName: { fontSize: 16, fontWeight: "700", color: colors.text },
+  barTrack: {
+    marginTop: 8, height: 6, borderRadius: 3,
+    backgroundColor: colors.bgSoft, overflow: "hidden",
+  },
+  barFill: { height: "100%", borderRadius: 3 },
+  appMins: {
+    fontSize: 17, fontWeight: "800", color: colors.text,
+    minWidth: 60, textAlign: "right",
+  },
+  reminder: {
+    marginTop: spacing.xl,
+    color: colors.textSoft,
+    fontSize: 13,
+    textAlign: "center",
+    lineHeight: 19,
+    fontStyle: "italic",
+  },
   exitBtn: {
-    marginTop: spacing.xl, alignSelf: "center", flexDirection: "row", alignItems: "center", gap: 6,
+    marginTop: spacing.xl, alignSelf: "center",
+    flexDirection: "row", alignItems: "center", gap: 6,
     paddingHorizontal: 14, paddingVertical: 10,
   },
   exitText: { color: colors.textSoft, fontSize: 12, fontWeight: "600" },
 
-  modalBg: { flex: 1, backgroundColor: "rgba(10,10,10,0.55)", padding: spacing.lg, justifyContent: "center" },
+  modalBg: {
+    flex: 1, backgroundColor: "rgba(10,10,10,0.55)",
+    padding: spacing.lg, justifyContent: "center",
+  },
   modalTitle: { fontSize: 20, fontWeight: "800", color: colors.text, marginBottom: 6 },
   modalSub: { fontSize: 13, color: colors.textSoft, marginBottom: spacing.md },
   input: {
     borderWidth: 1, borderColor: colors.border, borderRadius: radius.sm,
-    padding: 12, fontSize: 16, color: colors.text, marginBottom: spacing.md, backgroundColor: colors.bgSoft,
+    padding: 12, fontSize: 16, color: colors.text,
+    marginBottom: spacing.md, backgroundColor: colors.bgSoft,
   },
   mRow: { flexDirection: "row", gap: 10 },
-  btnGhost: { flex: 1, padding: 12, borderRadius: radius.sm, borderWidth: 1, borderColor: colors.border, alignItems: "center" },
-  btnPrimary: { flex: 1, padding: 12, borderRadius: radius.sm, backgroundColor: colors.primary, alignItems: "center" },
+  btnGhost: {
+    flex: 1, padding: 12, borderRadius: radius.sm,
+    borderWidth: 1, borderColor: colors.border, alignItems: "center",
+  },
+  btnPrimary: {
+    flex: 1, padding: 12, borderRadius: radius.sm,
+    backgroundColor: colors.primary, alignItems: "center",
+  },
 });
