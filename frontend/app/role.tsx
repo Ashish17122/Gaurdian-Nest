@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView,
   SafeAreaView, TextInput, Modal, Alert,
@@ -12,18 +12,34 @@ export default function RoleSelect() {
   const router = useRouter();
   const [adminModal, setAdminModal] = useState(false);
   const [code, setCode] = useState("");
+  const tapsRef = useRef(0);
+  const tapTimerRef = useRef<any>(null);
+
+  // Hidden admin unlock: tap the "GuardianNest" brand 7 times within 3 seconds
+  const onBrandTap = () => {
+    tapsRef.current += 1;
+    if (tapTimerRef.current) clearTimeout(tapTimerRef.current);
+    tapTimerRef.current = setTimeout(() => { tapsRef.current = 0; }, 3000);
+    if (tapsRef.current >= 7) {
+      tapsRef.current = 0;
+      setAdminModal(true);
+    }
+  };
 
   const tryAdmin = () => {
     if (!code.trim()) return Alert.alert("Enter admin code");
     router.push({ pathname: "/login", params: { role: "admin", admin_code: code.trim() } });
     setAdminModal(false);
+    setCode("");
   };
 
   return (
     <SafeAreaView style={styles.safe}>
       <ScrollView contentContainerStyle={styles.container} testID="role-select-screen">
         <View style={styles.header}>
-          <Text style={styles.brand}>GuardianNest</Text>
+          <TouchableOpacity activeOpacity={1} onPress={onBrandTap} testID="brand-tap-area">
+            <Text style={styles.brand}>GuardianNest</Text>
+          </TouchableOpacity>
           <Text style={styles.label}>SELECT MODE</Text>
           <Text style={styles.title}>Who's using{"\n"}this device?</Text>
         </View>
@@ -60,32 +76,16 @@ export default function RoleSelect() {
           <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
         </TouchableOpacity>
 
-        <Text style={[styles.label, { marginTop: spacing.xxl }]}>OWNER ONLY</Text>
-        <TouchableOpacity
-          testID="role-admin-btn"
-          activeOpacity={0.85}
-          style={[styles.roleCard, { backgroundColor: colors.adminBg, borderColor: colors.primarySoft }]}
-          onPress={() => setAdminModal(true)}
-        >
-          <View style={[styles.iconWrap, { backgroundColor: "#fff" }]}>
-            <Ionicons name="analytics" size={24} color={colors.admin} />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={[styles.roleTitle, { color: colors.admin }]}>Admin Panel</Text>
-            <Text style={styles.roleSub}>Hidden. Requires owner access code.</Text>
-          </View>
-          <Ionicons name="lock-closed" size={18} color={colors.admin} />
-        </TouchableOpacity>
-
         <Text style={styles.footer}>
-          By continuing you accept our Terms. {"\n"}Premium tier coming soon.
+          By continuing you accept our Terms.{"\n"}Premium tier coming soon.
         </Text>
       </ScrollView>
 
+      {/* Hidden admin unlock: tap brand 7x */}
       <Modal visible={adminModal} transparent animationType="fade" onRequestClose={() => setAdminModal(false)}>
         <View style={styles.modalBg}>
           <Card style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Admin access code</Text>
+            <Text style={styles.modalTitle}>Admin access</Text>
             <Text style={styles.modalSub}>Enter the owner access code to unlock the admin panel.</Text>
             <TextInput
               testID="admin-code-input"
@@ -99,7 +99,7 @@ export default function RoleSelect() {
               autoFocus
             />
             <View style={styles.row}>
-              <TouchableOpacity style={styles.btnGhost} onPress={() => setAdminModal(false)}>
+              <TouchableOpacity style={styles.btnGhost} onPress={() => { setAdminModal(false); setCode(""); }}>
                 <Text style={styles.btnGhostText}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.btnPrimary} onPress={tryAdmin} testID="admin-code-submit">
@@ -134,7 +134,7 @@ const styles = StyleSheet.create({
   footer: { marginTop: spacing.xxl, textAlign: "center", color: colors.textMuted, fontSize: 12, lineHeight: 18 },
 
   modalBg: { flex: 1, backgroundColor: "rgba(10,10,10,0.55)", padding: spacing.lg, justifyContent: "center" },
-  modalCard: { },
+  modalCard: {},
   modalTitle: { fontSize: 20, fontWeight: "800", color: colors.text, marginBottom: 6 },
   modalSub: { fontSize: 13, color: colors.textSoft, marginBottom: spacing.md },
   input: {
