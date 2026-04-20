@@ -66,10 +66,6 @@
     "experiments": {
       "typedRoutes": true
     },
-    "extra": {
-      "eas": {
-        "projectId": "REPLACE_ME_AFTER_eas_init"
-      }
-    }
+    
   }
 }
