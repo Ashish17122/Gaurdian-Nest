@@ -2,7 +2,7 @@ import React, { useEffect, useState, useRef, useCallback } from "react";
 import {
   View, Text, StyleSheet, SafeAreaView, TouchableOpacity,
   ScrollView, ActivityIndicator, Modal, TextInput, Alert, Platform, AppState,
-  RefreshControl,
+  RefreshControl, Switch,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
@@ -31,6 +31,10 @@ export default function ChildScreen() {
   const [user, setUser] = useState<any>(null);
   const [children, setChildren] = useState<any[]>([]);
   const [summary, setSummary] = useState<any>(null);
+  const [activeChild, setActiveChild] = useState<any>(null);
+  const [pairCode, setPairCode] = useState("");
+  const [pairing, setPairing] = useState(false);
+  const [monitoringOn, setMonitoringOn] = useState(true);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [exitModal, setExitModal] = useState(false);
@@ -38,61 +42,63 @@ export default function ChildScreen() {
   const heartbeatRef = useRef<any>(null);
   const refreshRef = useRef<any>(null);
 
-  // Initial boot: who am I, which device, ensure it exists
+  const fetchSummary = useCallback(async (childId: string) => {
+    const s = await api<any>(`/activity/summary/${childId}?days=1`);
+    setSummary(s);
+    setMonitoringOn(!!s?.monitoring_active);
+    return s;
+  }, []);
+
+  // Initial boot: who am I, load claimed child device
   const boot = useCallback(async () => {
     try {
       const me = await api<any>("/auth/me");
+      if (me?.role !== "child") {
+        router.replace(me?.is_admin ? "/admin" : "/parent");
+        return;
+      }
       setUser(me);
-      let list = await api<any[]>("/children").catch(() => []);
-      if (!list.length) {
-        const c = await api<any>("/children/pair", {
-          method: "POST",
-          body: JSON.stringify({ device_name: (me?.name || "Child") + "'s Device" }),
-        });
-        list = [c];
-      }
+      const myDevice = await api<any>("/children/my-device").catch(() => null);
+      const list = myDevice ? [myDevice] : [];
       setChildren(list);
-      if (list[0]) {
-        const s = await api<any>(`/activity/summary/${list[0].child_id}?days=1`);
-        setSummary(s);
-      }
+      setActiveChild(myDevice);
+      if (myDevice) await fetchSummary(myDevice.child_id);
     } catch {
       router.replace("/role");
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [router]);
+  }, [fetchSummary, router]);
 
   useEffect(() => { boot(); }, [boot]);
 
   // Heartbeat every 15s so the parent sees this device as ACTIVE
   useEffect(() => {
-    const child = children[0];
+    const child = activeChild;
     if (!child) return;
     const sendBeat = () => {
       api("/monitoring/heartbeat", {
         method: "POST",
-        body: JSON.stringify({ child_id: child.child_id, monitoring_active: true }),
+        body: JSON.stringify({ child_id: child.child_id, monitoring_active: monitoringOn }),
       }).catch(() => {});
     };
     sendBeat();
     heartbeatRef.current = setInterval(sendBeat, 15000);
     return () => clearInterval(heartbeatRef.current);
-  }, [children]);
+  }, [activeChild, monitoringOn]);
 
   // Auto-refresh the usage summary every 5s so kid sees live today's time
   useEffect(() => {
-    const child = children[0];
+    const child = activeChild;
     if (!child) return;
     refreshRef.current = setInterval(async () => {
       try {
-        const s = await api<any>(`/activity/summary/${child.child_id}?days=1`);
-        setSummary(s);
+        await fetchSummary(child.child_id);
       } catch {}
     }, 5000);
     return () => clearInterval(refreshRef.current);
-  }, [children]);
+  }, [activeChild, fetchSummary]);
 
   // Native: sticky notification "Monitoring is active"
   useEffect(() => {
@@ -113,18 +119,92 @@ export default function ChildScreen() {
     })();
   }, []);
 
+  // Android real usage ingestion (requires dev build + usage permission)
+  useEffect(() => {
+    if (Platform.OS !== "android" || !activeChild || !monitoringOn) return;
+    let timer: any;
+    const pollUsage = async () => {
+      try {
+        const mod: any = await (new Function("m", "return import(m)"))("react-native-usage-stats-manager");
+        const UsageStatsManager = mod?.default || mod?.UsageStatsManager || mod;
+        if (!UsageStatsManager?.queryUsageStats) return;
+        const end = Date.now();
+        const start = end - 5 * 60 * 1000; // last 5 minutes
+        const rows = await UsageStatsManager.queryUsageStats(start, end);
+        if (!Array.isArray(rows)) return;
+        const buckets: Record<string, number> = { YouTube: 0, Instagram: 0, Chrome: 0 };
+        for (const row of rows) {
+          const pkg = row?.packageName || row?.package_name;
+          const ms = Number(row?.totalTimeInForeground ?? row?.total_time_in_foreground ?? 0);
+          if (pkg === "com.google.android.youtube") buckets.YouTube += ms;
+          if (pkg === "com.instagram.android") buckets.Instagram += ms;
+          if (pkg === "com.android.chrome") buckets.Chrome += ms;
+        }
+        for (const [app, ms] of Object.entries(buckets)) {
+          const seconds = Math.floor(ms / 1000);
+          if (seconds > 0) {
+            await api("/activity/log", {
+              method: "POST",
+              body: JSON.stringify({
+                child_id: activeChild.child_id,
+                app_name: app,
+                duration_seconds: seconds,
+              }),
+            });
+          }
+        }
+      } catch {
+        // library/permission missing in Expo Go; keep app stable
+      }
+    };
+    pollUsage();
+    timer = setInterval(pollUsage, 60000);
+    return () => clearInterval(timer);
+  }, [activeChild, monitoringOn]);
+
   // Foreground/background heartbeat so parent knows when app is backgrounded
   useEffect(() => {
     const sub = AppState.addEventListener("change", () => {
-      if (children[0]) {
+      if (activeChild) {
         api("/monitoring/heartbeat", {
           method: "POST",
-          body: JSON.stringify({ child_id: children[0].child_id, monitoring_active: true }),
+          body: JSON.stringify({ child_id: activeChild.child_id, monitoring_active: monitoringOn }),
         }).catch(() => {});
       }
     });
     return () => sub.remove();
-  }, [children]);
+  }, [activeChild, monitoringOn]);
+
+  const toggleMonitoring = async (value: boolean) => {
+    if (!activeChild) return;
+    setMonitoringOn(value);
+    await api("/monitoring/heartbeat", {
+      method: "POST",
+      body: JSON.stringify({ child_id: activeChild.child_id, monitoring_active: value }),
+    });
+  };
+
+  const claimDevice = async () => {
+    if (!pairCode.trim()) return Alert.alert("Enter pairing code");
+    setPairing(true);
+    try {
+      const claimed = await api<any>("/children/claim", {
+        method: "POST",
+        body: JSON.stringify({
+          pairing_code: pairCode.trim(),
+          device_name: `${user?.name || "Child"}'s Device`,
+        }),
+      });
+      setPairCode("");
+      setActiveChild(claimed);
+      setChildren([claimed]);
+      await fetchSummary(claimed.child_id);
+    } catch (e: any) {
+      Alert.alert("Pairing failed", e.message || "Invalid code");
+    } finally {
+      setPairing(false);
+    }
+  };
 
   const tryExit = async () => {
     try {
@@ -158,6 +238,38 @@ export default function ChildScreen() {
   const perApp = summary?.per_app_minutes || {};
   const totalMins = summary?.total_minutes || 0;
 
+  if (!activeChild) {
+    return (
+      <SafeAreaView style={styles.safe}>
+        <View style={styles.banner}>
+          <Ionicons name="shield-checkmark" size={16} color="#065F46" />
+          <Text style={styles.bannerText}>Child mode active</Text>
+        </View>
+        <View style={[styles.container, { justifyContent: "center", flex: 1 }]}>
+          <Card>
+            <Text style={styles.modalTitle}>Pair this device</Text>
+            <Text style={styles.modalSub}>
+              Ask your parent to create a child device from Parent Dashboard and share the 6-digit code.
+            </Text>
+            <TextInput
+              testID="pairing-code-input"
+              style={styles.input}
+              value={pairCode}
+              onChangeText={setPairCode}
+              keyboardType="number-pad"
+              placeholder="Enter pairing code"
+              placeholderTextColor={colors.textMuted}
+              maxLength={6}
+            />
+            <TouchableOpacity style={styles.btnPrimary} onPress={claimDevice} disabled={pairing} testID="pairing-submit-btn">
+              {pairing ? <ActivityIndicator color="#fff" /> : <Text style={{ fontWeight: "700", color: "#fff" }}>Connect device</Text>}
+            </TouchableOpacity>
+          </Card>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={styles.safe}>
       {/* Persistent banner */}
@@ -185,6 +297,22 @@ export default function ChildScreen() {
             <Text style={styles.liveText}>LIVE</Text>
           </View>
         </View>
+
+        <Card style={{ marginTop: spacing.md }}>
+          <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+            <View style={{ flex: 1, paddingRight: spacing.md }}>
+              <Text style={styles.settingTitle}>Monitoring status</Text>
+              <Text style={styles.settingSub}>
+                Turning this OFF immediately sends an alert to your parent.
+              </Text>
+            </View>
+            <Switch
+              testID="monitoring-toggle"
+              value={monitoringOn}
+              onValueChange={toggleMonitoring}
+            />
+          </View>
+        </Card>
 
         {/* Apps */}
         <Text style={styles.sectionLabel}>APPS</Text>
@@ -345,6 +473,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14, paddingVertical: 10,
   },
   exitText: { color: colors.textSoft, fontSize: 12, fontWeight: "600" },
+  settingTitle: { fontSize: 15, fontWeight: "700", color: colors.text },
+  settingSub: { fontSize: 12, color: colors.textSoft, marginTop: 2, lineHeight: 16 },
 
   modalBg: {
     flex: 1, backgroundColor: "rgba(10,10,10,0.55)",
