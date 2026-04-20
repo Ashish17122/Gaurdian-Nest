@@ -171,6 +171,18 @@ async def require_admin(request: Request) -> User:
         raise HTTPException(status_code=403, detail="Admin only")
     return user
 
+async def require_parent(request: Request) -> User:
+    user = await current_user(request)
+    if user.role not in ("parent", "admin"):
+        raise HTTPException(status_code=403, detail="Parent access only")
+    return user
+
+async def require_child(request: Request) -> User:
+    user = await current_user(request)
+    if user.role != "child":
+        raise HTTPException(status_code=403, detail="Child access only")
+    return user
+
 def hash_pin(pin: str) -> str:
     return hashlib.sha256(f"guardiannest::{pin}".encode()).hexdigest()
 
@@ -350,11 +362,12 @@ class PairChildReq(BaseModel):
 
 @api_router.post("/children/pair")
 async def pair_child(payload: PairChildReq, request: Request):
-    user = await current_user(request)
+    user = await require_parent(request)
     pairing_code = str(random.randint(100000, 999999))
     child = {
         "child_id": new_id("chd"),
         "parent_id": user.user_id,
+        "child_user_id": None,
         "device_name": payload.device_name,
         "pairing_code": pairing_code,
         "monitoring_active": True,
@@ -368,9 +381,37 @@ async def pair_child(payload: PairChildReq, request: Request):
 
 @api_router.get("/children")
 async def list_children(request: Request):
-    user = await current_user(request)
+    user = await require_parent(request)
     cursor = db.children.find({"parent_id": user.user_id}, {"_id": 0})
     return await cursor.to_list(200)
+
+class ClaimChildReq(BaseModel):
+    pairing_code: str = Field(min_length=6, max_length=6)
+    device_name: Optional[str] = None
+
+@api_router.post("/children/claim")
+async def claim_child(payload: ClaimChildReq, request: Request):
+    user = await require_child(request)
+    child = await db.children.find_one({"pairing_code": payload.pairing_code}, {"_id": 0})
+    if not child:
+        raise HTTPException(status_code=404, detail="Invalid pairing code")
+    if child.get("child_user_id") and child.get("child_user_id") != user.user_id:
+        raise HTTPException(status_code=409, detail="This pairing code is already claimed")
+    update = {"child_user_id": user.user_id, "last_heartbeat_at": utcnow()}
+    if payload.device_name and payload.device_name.strip():
+        update["device_name"] = payload.device_name.strip()
+    await db.children.update_one({"child_id": child["child_id"]}, {"$set": update})
+    child.update(update)
+    child.pop("_id", None)
+    return child
+
+@api_router.get("/children/my-device")
+async def my_child_device(request: Request):
+    user = await require_child(request)
+    child = await db.children.find_one({"child_user_id": user.user_id}, {"_id": 0})
+    if not child:
+        raise HTTPException(status_code=404, detail="No paired child device found")
+    return child
 
 class ActivityLogReq(BaseModel):
     child_id: str
@@ -383,6 +424,14 @@ async def log_activity(payload: ActivityLogReq, request: Request):
     child = await db.children.find_one({"child_id": payload.child_id}, {"_id": 0})
     if not child:
         raise HTTPException(status_code=404, detail="Child not found")
+    if user.role == "child":
+        if child.get("child_user_id") != user.user_id:
+            raise HTTPException(status_code=403, detail="Child does not own this device")
+    elif user.role in ("parent", "admin"):
+        if child.get("parent_id") != user.user_id and not user.is_admin:
+            raise HTTPException(status_code=403, detail="Not your child device")
+    else:
+        raise HTTPException(status_code=403, detail="Unsupported role")
     doc = {
         "log_id": new_id("act"),
         "child_id": payload.child_id,
@@ -398,7 +447,15 @@ async def log_activity(payload: ActivityLogReq, request: Request):
 @api_router.get("/activity/summary/{child_id}")
 async def activity_summary(child_id: str, request: Request, days: int = 7):
     user = await current_user(request)
-    child = await db.children.find_one({"child_id": child_id, "parent_id": user.user_id}, {"_id": 0})
+    child_query: Dict[str, Any] = {"child_id": child_id}
+    if user.role in ("parent", "admin"):
+        if not user.is_admin:
+            child_query["parent_id"] = user.user_id
+    elif user.role == "child":
+        child_query["child_user_id"] = user.user_id
+    else:
+        raise HTTPException(status_code=403, detail="Unsupported role")
+    child = await db.children.find_one(child_query, {"_id": 0})
     if not child:
         raise HTTPException(status_code=404, detail="Child not found")
     since = utcnow() - timedelta(days=days)
@@ -444,10 +501,15 @@ class HeartbeatReq(BaseModel):
     push_token: Optional[str] = None
 
 @api_router.post("/monitoring/heartbeat")
-async def heartbeat(payload: HeartbeatReq):
+async def heartbeat(payload: HeartbeatReq, request: Request):
+    user = await current_user(request)
     child = await db.children.find_one({"child_id": payload.child_id}, {"_id": 0})
     if not child:
         raise HTTPException(status_code=404, detail="Child not found")
+    if user.role == "child" and child.get("child_user_id") != user.user_id:
+        raise HTTPException(status_code=403, detail="Child does not own this device")
+    if user.role in ("parent", "admin") and child.get("parent_id") != user.user_id and not user.is_admin:
+        raise HTTPException(status_code=403, detail="Not your child device")
     update = {
         "last_heartbeat_at": utcnow(),
         "monitoring_active": payload.monitoring_active,
@@ -653,8 +715,13 @@ async def verify_payment(payload: VerifyPaymentReq, request: Request):
         {"razorpay_order_id": payload.razorpay_order_id, "user_id": user.user_id},
         {"$set": {"status": "paid", "razorpay_payment_id": payload.razorpay_payment_id}},
     )
+    order = await db.orders.find_one(
+        {"razorpay_order_id": payload.razorpay_order_id, "user_id": user.user_id},
+        {"_id": 0, "plan": 1},
+    )
+    plan = (order or {}).get("plan", "monthly")
     # Grant premium
-    expires = utcnow() + timedelta(days=365 if "yearly" in payload.razorpay_order_id else 30)
+    expires = utcnow() + timedelta(days=365 if plan == "yearly" else 30)
     await db.subscriptions.update_one(
         {"user_id": user.user_id},
         {"$set": {"user_id": user.user_id, "tier": "premium", "expires_at": expires,
@@ -720,6 +787,7 @@ async def seed_demo(request: Request):
         child = {
             "child_id": new_id("chd"),
             "parent_id": parent["user_id"],
+            "child_user_id": None,
             "device_name": "Aarav's Phone",
             "pairing_code": "482193",
             "monitoring_active": True,

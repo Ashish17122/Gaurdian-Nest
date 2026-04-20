@@ -31,6 +31,10 @@ export default function ParentDashboard() {
   const loadAll = useCallback(async () => {
     try {
       const me = await api<any>("/auth/me");
+      if (me?.role === "child") {
+        router.replace("/child");
+        return;
+      }
       setUser(me);
       const [list, cfg, pinInfo, subStatus] = await Promise.all([
         api<any[]>("/children"),
@@ -106,19 +110,6 @@ export default function ParentDashboard() {
     Alert.alert("Parent PIN saved", "Child will need this PIN to exit child mode.");
   };
 
-  const simulate = async (app: string) => {
-    if (!selected) return;
-    await api("/activity/log", {
-      method: "POST",
-      body: JSON.stringify({
-        child_id: selected.child_id, app_name: app,
-        duration_seconds: Math.floor(Math.random() * 40 + 10) * 60,
-      }),
-    });
-    const s = await api<any>(`/activity/summary/${selected.child_id}?days=7`);
-    setSummary(s);
-  };
-
   const doLogout = async () => {
     await api("/auth/logout", { method: "POST" }).catch(() => {});
     await setToken(null);
@@ -176,7 +167,7 @@ export default function ParentDashboard() {
       >
         {/* Alerts */}
         {alerts.filter(a => !a.read).length > 0 && (
-          <Card style={[styles.alertCard]} testID="alerts-card">
+          <Card style={styles.alertCard} testID="alerts-card">
             <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
               <Ionicons name="warning" size={18} color={colors.danger} />
               <Text style={{ fontWeight: "800", color: colors.danger }}>
@@ -266,16 +257,6 @@ export default function ParentDashboard() {
             />
           )}
         </Card>
-
-        {/* Simulator */}
-        <Text style={styles.sectionLabel}>SIMULATE ACTIVITY (DEMO)</Text>
-        <View style={styles.simRow}>
-          {["YouTube", "Instagram", "Chrome"].map(a => (
-            <TouchableOpacity key={a} style={styles.simBtn} onPress={() => simulate(a)} testID={`simulate-${a}-btn`}>
-              <Text style={styles.simBtnText}>+ {a}</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
 
         {/* Premium */}
         <Text style={styles.sectionLabel}>PREMIUM</Text>
@@ -435,13 +416,6 @@ const styles = StyleSheet.create({
   },
   statsRow: { flexDirection: "row", gap: 10, marginBottom: 10 },
   statCard: { flex: 1, padding: 0 },
-  simRow: { flexDirection: "row", gap: 10 },
-  simBtn: {
-    flex: 1, padding: 12, borderRadius: radius.sm,
-    borderWidth: 1, borderColor: colors.border, alignItems: "center",
-    backgroundColor: colors.bgSoft,
-  },
-  simBtnText: { fontWeight: "700", color: colors.text, fontSize: 13 },
   premiumCard: {},
   premiumTitle: { fontSize: 20, fontWeight: "800", color: colors.text, letterSpacing: -0.5 },
   premiumSub: { marginTop: 4, color: colors.textSoft, fontSize: 13, lineHeight: 19 },
