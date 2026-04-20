@@ -26,7 +26,7 @@
       "package": "app.guardiannest",
       "versionCode": 1,
       "adaptiveIcon": {
-        "foregroundImage": "./assets/images/icon.png",
+        "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#09637E"
       },
       "edgeToEdgeEnabled": true,
@@ -57,7 +57,7 @@
       [
         "expo-notifications",
         {
-          "icon": "./assets/images/notification-icon.png",
+          "icon": "./assets/images/icon.png",
           "color": "#088395"
         }
       ],
