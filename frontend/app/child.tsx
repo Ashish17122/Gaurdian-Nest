@@ -1,7 +1,17 @@
 import { useEffect } from "react";
 import { View, Text, NativeModules } from "react-native";
 import { api } from "../src/api";
+import { useEffect } from "react";
+import { NativeModules } from "react-native";
 
+export default function Child() {
+
+  useEffect(() => {
+    NativeModules.UsageModule.startService();
+  }, []);
+
+  return null;
+}
 export default function Child() {
 
   // Start native tracking service
