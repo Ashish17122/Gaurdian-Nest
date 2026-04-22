@@ -1,106 +1,182 @@
 import { useEffect, useState } from "react";
 import {
-  View,
+  ScrollView,
   Text,
-  TextInput,
-  Button,
-  FlatList,
+  View,
+  StyleSheet,
+  Dimensions,
+  ActivityIndicator,
 } from "react-native";
+import { BarChart } from "react-native-chart-kit";
 import { api } from "../src/api";
+import Map from "./MapView";
+
+const width = Dimensions.get("window").width;
 
 export default function Parent() {
-  const [code, setCode] = useState("");
-  const [data, setData] = useState<any[]>([]);
-
-  const linkChild = async () => {
-    try {
-      await api("/children/link", {
-        method: "POST",
-        body: JSON.stringify({ child_public_id: code }),
-      });
-
-      alert("Child linked successfully");
-      load();
-    } catch (e: any) {
-      alert(e.message);
-    }
-  };
-
-  const load = async () => {
-    try {
-      const res = await api("/activity/daily");
-      setData(res || []);
-    } catch (e) {
-      console.log(e);
-    }
-  };
+  const [apps, setApps] = useState<any[]>([]);
+  const [alerts, setAlerts] = useState<any[]>([]);
+  const [insights, setInsights] = useState<any>(null);
+  const [location, setLocation] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     load();
-    const i = setInterval(load, 5000);
-    return () => clearInterval(i);
+
+    const interval = setInterval(load, 5000); // auto refresh
+    return () => clearInterval(interval);
   }, []);
 
+  const load = async () => {
+    try {
+      const [activity, alertData, ai, loc] = await Promise.all([
+        api("/activity/daily"),
+        api("/limits/check"),
+        api("/ai/insights"),
+        api("/location/latest"),
+      ]);
+
+      setApps(activity || []);
+      setAlerts(alertData || []);
+      setInsights(ai || null);
+      setLocation(loc || null);
+    } catch (e) {
+      console.log("Load error:", e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const chartData = {
+    labels: apps.map((a) => a.app?.slice(0, 5) || "App"),
+    datasets: [
+      {
+        data: apps.map((a) => a.minutes || 0),
+      },
+    ],
+  };
+
+  if (loading) {
+    return (
+      <View style={styles.loader}>
+        <ActivityIndicator size="large" color="#00C9A7" />
+      </View>
+    );
+  }
+
   return (
-    <View style={{ flex: 1, padding: 20 }}>
-      
-      {/* LINK CHILD */}
-      <TextInput
-        placeholder="Enter child code"
-        value={code}
-        onChangeText={setCode}
-        style={{ borderWidth: 1, padding: 10, marginBottom: 10 }}
-      />
+    <ScrollView style={styles.container}>
+      <Text style={styles.header}>GuardianNest</Text>
 
-      <Button title="Link Child" onPress={linkChild} />
+      {/* 📊 USAGE CHART */}
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>📊 Usage Today</Text>
 
-      {/* DASHBOARD */}
-      <FlatList
-        style={{ marginTop: 20 }}
-        data={data}
-        keyExtractor={(_, i) => i.toString()}
-        renderItem={({ item }) => (
-          <View
-            style={{
-              padding: 15,
-              marginVertical: 5,
-              borderRadius: 10,
-              backgroundColor: "#f2f2f2",
+        {apps.length > 0 ? (
+          <BarChart
+            data={chartData}
+            width={width - 40}
+            height={220}
+            yAxisLabel=""            // ✅ FIX (required by TS)
+            yAxisSuffix="m"
+            fromZero
+            showValuesOnTopOfBars
+            chartConfig={{
+              backgroundColor: "#132F3D",
+              backgroundGradientFrom: "#132F3D",
+              backgroundGradientTo: "#132F3D",
+              decimalPlaces: 0,
+              color: (opacity = 1) =>
+                `rgba(0, 201, 167, ${opacity})`,
+              labelColor: () => "#ffffff",
             }}
-          >
-            <Text style={{ fontSize: 18, fontWeight: "bold" }}>
-              {item.app}
-            </Text>
-
-            <Text style={{ color: "#666" }}>{item.category}</Text>
-
-            <View
-              style={{
-                height: 6,
-                backgroundColor: "#ddd",
-                marginVertical: 5,
-                borderRadius: 3,
-              }}
-            >
-              <View
-                style={{
-                  width: `${Math.min(item.minutes * 2, 100)}%`,
-                  backgroundColor: "#4CAF50",
-                  height: 6,
-                  borderRadius: 3,
-                }}
-              />
-            </View>
-
-            <Text>{item.minutes} min</Text>
-          </View>
+            style={{ borderRadius: 10 }}
+          />
+        ) : (
+          <Text style={styles.empty}>No usage data yet</Text>
         )}
-        ListEmptyComponent={
-          <Text style={{ textAlign: "center", marginTop: 20 }}>
-            No activity yet
-          </Text>
-        }
-      />
-    </View>
+      </View>
+
+      {/* 📍 LIVE LOCATION */}
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>📍 Live Location</Text>
+        <Map location={location} />
+      </View>
+
+      {/* 🧠 AI INSIGHTS */}
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>🧠 AI Insights</Text>
+
+        {!insights ? (
+          <Text style={styles.empty}>No data yet</Text>
+        ) : insights.message ? (
+          <Text style={styles.item}>{insights.message}</Text>
+        ) : (
+          insights.insights?.map((i: string, idx: number) => (
+            <Text key={idx} style={styles.item}>
+              • {i}
+            </Text>
+          ))
+        )}
+      </View>
+
+      {/* 🔔 ALERTS */}
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>🔔 Alerts</Text>
+
+        {alerts.length === 0 ? (
+          <Text style={styles.empty}>No alerts</Text>
+        ) : (
+          alerts.map((a, i) => (
+            <Text key={i} style={styles.alert}>
+              {a.app} exceeded limit 🚨
+            </Text>
+          ))
+        )}
+      </View>
+    </ScrollView>
   );
 }
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: "#0B1F2A",
+    padding: 16,
+  },
+  header: {
+    fontSize: 28,
+    color: "#fff",
+    fontWeight: "bold",
+    marginBottom: 20,
+  },
+  card: {
+    backgroundColor: "#132F3D",
+    padding: 16,
+    borderRadius: 12,
+    marginBottom: 16,
+  },
+  cardTitle: {
+    color: "#fff",
+    fontWeight: "600",
+    marginBottom: 10,
+  },
+  item: {
+    color: "#ddd",
+    marginBottom: 4,
+  },
+  alert: {
+    color: "#FF6B6B",
+    fontWeight: "bold",
+    marginBottom: 4,
+  },
+  empty: {
+    color: "#aaa",
+  },
+  loader: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "#0B1F2A",
+  },
+});

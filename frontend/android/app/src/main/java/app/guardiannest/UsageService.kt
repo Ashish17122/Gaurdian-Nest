@@ -73,6 +73,7 @@ class UsageService : Service() {
             conn.outputStream.close()
 
             conn.responseCode
+
         } catch (e: Exception) {
             Log.e("UsageService", "Send error: ${e.message}")
         }

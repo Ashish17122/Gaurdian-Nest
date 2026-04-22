@@ -28,13 +28,22 @@
       },
       "edgeToEdgeEnabled": true,
 
+      "googleServicesFile": "./android/app/google-services.json",
+
       "permissions": [
+        "INTERNET",
         "POST_NOTIFICATIONS",
         "RECEIVE_BOOT_COMPLETED",
         "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_LOCATION",
+        "WAKE_LOCK",
+
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
+
         "PACKAGE_USAGE_STATS",
-        "QUERY_ALL_PACKAGES",
-        "WAKE_LOCK"
+        "QUERY_ALL_PACKAGES"
       ]
     },
 

@@ -1,22 +1,18 @@
-import { View, Button } from "react-native";
+import { useEffect } from "react";
 import { router } from "expo-router";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
-export default function Home() {
-  return (
-    <View style={{ flex: 1, justifyContent: "center", gap: 20, padding: 20 }}>
-      
-      {/* 👨‍👩‍👧 Parent */}
-      <Button
-        title="I am Parent"
-        onPress={() => router.push("/login")}
-      />
+export default function Index() {
+  useEffect(() => {
+    check();
+  }, []);
 
-      {/* 📱 Child */}
-      <Button
-        title="I am Child"
-        onPress={() => router.push("/child")}
-      />
+  const check = async () => {
+    const token = await AsyncStorage.getItem("gn_token");
 
-    </View>
-  );
+    if (token) router.replace("/parent");
+    else router.replace("/role");
+  };
+
+  return null;
 }

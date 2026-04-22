@@ -4,6 +4,8 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from datetime import datetime
 from collections import defaultdict
 import uuid, os, requests
+from notification import check_and_notify_limits
+from insights import generate_insights
 
 from google.oauth2 import id_token
 from google.auth.transport import requests as grequests
@@ -40,15 +42,6 @@ def get_category(pkg: str):
     if "chrome" in pkg: return "Browsing"
     return "Other"
 
-def send_push(token, title, body):
-    try:
-        requests.post(
-            "https://exp.host/--/api/v2/push/send",
-            json={"to": token, "title": title, "body": body},
-        )
-    except Exception as e:
-        print("Push error:", e)
-
 # ================= AUTH =================
 async def get_user(request: Request):
     token = request.headers.get("Authorization", "").replace("Bearer ", "")
@@ -62,23 +55,14 @@ async def get_user(request: Request):
 async def google_login(payload: dict):
     token = payload.get("token")
 
-    if not token:
-        raise HTTPException(400, "Token missing")
-
     try:
         idinfo = id_token.verify_oauth2_token(
             token,
             grequests.Request(),
             GOOGLE_CLIENT_ID
         )
-
         email = idinfo.get("email")
-
-        if not email:
-            raise HTTPException(400, "Email not found")
-
-    except Exception as e:
-        print("Google auth error:", e)
+    except:
         raise HTTPException(401, "Invalid Google token")
 
     user = await db.users.find_one({"email": email})
@@ -96,18 +80,10 @@ async def google_login(payload: dict):
 
     await db.sessions.insert_one({
         "user_id": user["user_id"],
-        "session_token": session_token,
-        "created_at": utc()
+        "session_token": session_token
     })
 
-    return {
-        "user": {
-            "user_id": user["user_id"],
-            "email": user["email"],
-            "role": user["role"]
-        },
-        "session_token": session_token
-    }
+    return {"session_token": session_token}
 
 # ================= MOCK LOGIN =================
 @api.post("/auth/mock-login")
@@ -136,10 +112,6 @@ async def login(payload: dict):
 
     return {"user": user, "session_token": token}
 
-@api.get("/auth/me")
-async def me(request: Request):
-    return await get_user(request)
-
 # ================= LINK =================
 @api.post("/children/link")
 async def link(payload: dict, request: Request):
@@ -159,15 +131,15 @@ async def link(payload: dict, request: Request):
 
     return {"ok": True}
 
-# ================= TRACK =================
+# ================= TRACK (FIXED) =================
 @api.post("/activity/log")
-async def log_activity(payload: dict, request: Request):
-    user = await get_user(request)
-
+async def log_activity(payload: dict):
     pkg = payload["app"]
     duration = payload["duration"]
+    child_id = payload["child_id"]
 
     app_doc = await db.apps.find_one({"package": pkg})
+
     if not app_doc:
         app_doc = {
             "package": pkg,
@@ -176,21 +148,28 @@ async def log_activity(payload: dict, request: Request):
         }
         await db.apps.insert_one(app_doc)
 
-    await db.activity.insert_one({
-        "child_id": user["user_id"],
-        "app": pkg,
-        "duration": duration,
-        "timestamp": utc()
-    })
-
     await db.daily.update_one(
         {
-            "child_id": user["user_id"],
+            "child_id": child_id,
             "date": today(),
             "app": pkg
         },
         {"$inc": {"duration": duration}},
         upsert=True
+    )
+
+    # 🔔 CHECK LIMIT + SEND PUSH
+    updated = await db.daily.find_one({
+        "child_id": child_id,
+        "date": today(),
+        "app": pkg
+    })
+
+    await check_and_notify_limits(
+        db,
+        child_id,
+        pkg,
+        updated["duration"]
     )
 
     return {"ok": True}
@@ -217,25 +196,108 @@ async def daily_summary(request: Request):
         app_doc = await db.apps.find_one({"package": pkg})
         result.append({
             "app": app_doc["name"],
-            "category": app_doc["category"],
             "minutes": round(secs / 60, 1)
         })
 
     result.sort(key=lambda x: -x["minutes"])
     return result
 
-# ================= LIMITS =================
-@api.post("/limits/set")
-async def set_limit(payload: dict, request: Request):
-    user = await get_user(request)
+# ================= AI INSIGHTS =================
+@api.get("/ai/insights")
+async def ai_insights(request: Request):
+    parent = await get_user(request)
 
-    await db.limits.update_one(
-        {"user_id": user["user_id"], "app": payload["app"]},
-        {"$set": {"limit": payload["limit"]}},
-        upsert=True
+    # 🔗 get children
+    links = db.links.find({"parent_id": parent["user_id"]})
+    child_ids = [l["child_id"] async for l in links]
+
+    if not child_ids:
+        return {"message": "No children linked"}
+
+    total = 0
+    app_usage = {}
+
+    async for d in db.daily.find({
+        "child_id": {"$in": child_ids}
+    }):
+        app = d["app"]
+        duration = d["duration"]
+
+        total += duration
+        app_usage[app] = app_usage.get(app, 0) + duration
+
+    if total == 0:
+        return {"message": "No data yet"}
+
+    # 🧠 ANALYSIS
+    insights = []
+
+    # 🔥 total screen time
+    hours = total / 3600
+    if hours > 6:
+        insights.append("Very high screen time (>6h)")
+    elif hours > 3:
+        insights.append("Moderate screen time")
+    else:
+        insights.append("Healthy screen time")
+
+    # 📱 top app
+    top_app = max(app_usage, key=app_usage.get)
+    top_ratio = app_usage[top_app] / total
+
+    if top_ratio > 0.5:
+        insights.append(f"Most time spent on {top_app}")
+
+    # 🎥 video detection
+    video_time = sum(
+        v for k, v in app_usage.items()
+        if "youtube" in k or "netflix" in k
     )
 
-    return {"ok": True}
+    if video_time / total > 0.4:
+        insights.append("High video consumption")
+
+    # 💬 social detection
+    social_time = sum(
+        v for k, v in app_usage.items()
+        if "instagram" in k or "facebook" in k
+    )
+
+    if social_time / total > 0.4:
+        insights.append("High social media usage")
+
+    # 🎮 gaming detection
+    game_time = sum(
+        v for k, v in app_usage.items()
+        if "game" in k or "pubg" in k or "freefire" in k
+    )
+
+    if game_time / total > 0.4:
+        insights.append("High gaming activity")
+
+    return {
+        "total_hours": round(hours, 2),
+        "top_app": top_app,
+        "insights": insights
+    }
+
+# ================= LIMIT CHECK =================
+@api.get("/limits/check")
+async def check_limits(request: Request):
+    parent = await get_user(request)
+
+    links = db.links.find({"parent_id": parent["user_id"]})
+    child_ids = [l["child_id"] async for l in links]
+
+    alerts = []
+
+    async for d in db.daily.find({"child_id": {"$in": child_ids}}):
+        limit = await db.limits.find_one({"app": d["app"]})
+
+        if limit and d["duration"] > limit["limit"]:
+            alerts.append({"app": d["app"]})
+
+    return alerts
 
 # ================= PUSH =================
 @api.post("/notifications/register")
@@ -257,5 +319,36 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# =================== Location API =============
+@api.post("/location/update")
+async def update_location(payload: dict, request: Request):
+    user = await get_user(request)
+
+    await db.locations.update_one(
+        {"child_id": user["user_id"]},
+        {
+            "$set": {
+                "lat": payload["lat"],
+                "lng": payload["lng"],
+                "updated_at": datetime.utcnow()
+            }
+        },
+        upsert=True
+    )
+
+    return {"ok": True}
+
+@api.get("/location/latest")
+async def get_location(request: Request):
+    parent = await get_user(request)
+
+    link = await db.links.find_one({"parent_id": parent["user_id"]})
+    if not link:
+        return {}
+
+    loc = await db.locations.find_one({"child_id": link["child_id"]})
+
+    return loc or {}
 
 app.include_router(api)

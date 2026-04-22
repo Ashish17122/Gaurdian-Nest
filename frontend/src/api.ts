@@ -4,7 +4,7 @@ const BASE =
   process.env.EXPO_PUBLIC_BACKEND_URL ||
   "https://gaurdian-nest.onrender.com";
 
-const TOKEN_KEY = "gn_session_token";
+const TOKEN_KEY = "gn_token";
 
 export async function setToken(token: string | null) {
   if (token) await AsyncStorage.setItem(TOKEN_KEY, token);
@@ -28,8 +28,8 @@ export async function api(path: string, options: any = {}) {
   });
 
   if (!res.ok) {
-    const text = await res.text();
-    throw new Error(text || "API error");
+    const txt = await res.text();
+    throw new Error(txt || "API error");
   }
 
   return res.json();

@@ -9,8 +9,8 @@ class UsageModule(reactContext: ReactApplicationContext) :
     override fun getName(): String = "UsageModule"
 
     @ReactMethod
-    fun startService() {
-        val intent = Intent(reactApplicationContext, UsageService::class.java)
+    fun startLocation() {
+        val intent = Intent(reactApplicationContext, LocationService::class.java)
         reactApplicationContext.startService(intent)
     }
 }

@@ -1,50 +1,82 @@
 import { useEffect } from "react";
-import { View, Button, Alert } from "react-native";
-import * as WebBrowser from "expo-web-browser";
-import * as Google from "expo-auth-session/providers/google";
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  StyleSheet,
+  Alert,
+} from "react-native";
+import { useLocalSearchParams } from "expo-router";
+import { GoogleSignin } from "@react-native-google-signin/google-signin";
 import { api, setToken } from "../src/api";
+import { registerPush } from "../src/notifications";
 import { router } from "expo-router";
 
-WebBrowser.maybeCompleteAuthSession();
-
 export default function Login() {
-  const [request, response, promptAsync] = Google.useAuthRequest({
-    clientId:
-      "786843635437-k0qqfgirae0jvgqfpss59jam2rmj7bs3.apps.googleusercontent.com",
-    androidClientId:
-      "786843635437-39ajq46i3i4ds5cf9ckp99g8eikn3kc7.apps.googleusercontent.com",
-  });
+  const { role = "parent", admin_code } = useLocalSearchParams();
 
   useEffect(() => {
-    if (response?.type === "success") {
-      handleGoogleLogin(response.authentication?.idToken);
-    }
-  }, [response]);
+    GoogleSignin.configure({
+      webClientId:
+        "786843635437-k0qqfgirae0jvgqfpss59jam2rmj7bs3.apps.googleusercontent.com",
+    });
 
-  const handleGoogleLogin = async (idToken?: string) => {
+    registerDevice();
+  }, []);
+
+  const registerDevice = async () => {
     try {
-      if (!idToken) throw new Error("No Google token");
+      const token = await registerPush();
+      if (token) {
+        await api("/device/register", {
+          method: "POST",
+          body: JSON.stringify({ token }),
+        });
+      }
+    } catch {}
+  };
+
+  const signIn = async () => {
+    try {
+      await GoogleSignin.hasPlayServices();
+      const user: any = await GoogleSignin.signIn();
+
+      const idToken = user.data?.idToken;
+      if (!idToken) throw new Error("No ID token");
 
       const res = await api("/auth/google", {
         method: "POST",
-        body: JSON.stringify({ token: idToken }),
+        body: JSON.stringify({
+          token: idToken,
+          role,
+          admin_code,
+        }),
       });
 
       await setToken(res.session_token);
 
-      router.replace("/parent");
+      if (res.user.is_admin) router.replace("/admin");
+      else if (res.user.role === "child") router.replace("/child");
+      else router.replace("/parent");
     } catch (e: any) {
       Alert.alert("Login failed", e.message);
     }
   };
 
   return (
-    <View style={{ padding: 20 }}>
-      <Button
-        title="Continue with Google"
-        onPress={() => promptAsync()}
-        disabled={!request}
-      />
+    <View style={styles.container}>
+      <Text style={styles.title}>GuardianNest</Text>
+
+      <TouchableOpacity style={styles.btn} onPress={signIn}>
+        <Text style={styles.btnText}>Continue with Google</Text>
+      </TouchableOpacity>
     </View>
   );
 }
+
+const styles = StyleSheet.create({
+  container: { flex: 1, justifyContent: "center", padding: 24, backgroundColor: "#0B1F2A" },
+  title: { fontSize: 34, color: "#fff", marginBottom: 30 },
+  btn: { backgroundColor: "#fff", padding: 16, borderRadius: 12, alignItems: "center" },
+  btnText: { fontWeight: "600" },
+});
