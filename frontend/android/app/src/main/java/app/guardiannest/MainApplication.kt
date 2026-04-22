@@ -24,7 +24,7 @@ class MainApplication : Application(), ReactApplication {
 
       override fun getPackages(): List<ReactPackage> {
         val packages = PackageList(this).packages.toMutableList()
-
+      
         // ✅ ADD YOUR MODULE HERE
         packages.add(UsagePackage())
 
