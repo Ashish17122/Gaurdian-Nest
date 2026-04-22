@@ -5,6 +5,12 @@ from datetime import datetime
 from collections import defaultdict
 import uuid, os, requests
 
+from google.oauth2 import id_token
+from google.auth.transport import requests as grequests
+
+# ================= CONFIG =================
+GOOGLE_CLIENT_ID = "786843635437-k0qqfgirae0jvgqfpss59jam2rmj7bs3.apps.googleusercontent.com"
+
 app = FastAPI()
 api = APIRouter(prefix="/api")
 
@@ -38,11 +44,7 @@ def send_push(token, title, body):
     try:
         requests.post(
             "https://exp.host/--/api/v2/push/send",
-            json={
-                "to": token,
-                "title": title,
-                "body": body,
-            },
+            json={"to": token, "title": title, "body": body},
         )
     except Exception as e:
         print("Push error:", e)
@@ -55,6 +57,59 @@ async def get_user(request: Request):
         raise HTTPException(401, "Unauthorized")
     return await db.users.find_one({"user_id": session["user_id"]})
 
+# ================= GOOGLE LOGIN =================
+@api.post("/auth/google")
+async def google_login(payload: dict):
+    token = payload.get("token")
+
+    if not token:
+        raise HTTPException(400, "Token missing")
+
+    try:
+        idinfo = id_token.verify_oauth2_token(
+            token,
+            grequests.Request(),
+            GOOGLE_CLIENT_ID
+        )
+
+        email = idinfo.get("email")
+
+        if not email:
+            raise HTTPException(400, "Email not found")
+
+    except Exception as e:
+        print("Google auth error:", e)
+        raise HTTPException(401, "Invalid Google token")
+
+    user = await db.users.find_one({"email": email})
+
+    if not user:
+        user = {
+            "user_id": new_id("usr"),
+            "email": email,
+            "role": "parent",
+            "created_at": utc()
+        }
+        await db.users.insert_one(user)
+
+    session_token = "tok_" + uuid.uuid4().hex
+
+    await db.sessions.insert_one({
+        "user_id": user["user_id"],
+        "session_token": session_token,
+        "created_at": utc()
+    })
+
+    return {
+        "user": {
+            "user_id": user["user_id"],
+            "email": user["email"],
+            "role": user["role"]
+        },
+        "session_token": session_token
+    }
+
+# ================= MOCK LOGIN =================
 @api.post("/auth/mock-login")
 async def login(payload: dict):
     email = payload["email"]
@@ -112,7 +167,6 @@ async def log_activity(payload: dict, request: Request):
     pkg = payload["app"]
     duration = payload["duration"]
 
-    # auto register app
     app_doc = await db.apps.find_one({"package": pkg})
     if not app_doc:
         app_doc = {
@@ -122,7 +176,6 @@ async def log_activity(payload: dict, request: Request):
         }
         await db.apps.insert_one(app_doc)
 
-    # raw log
     await db.activity.insert_one({
         "child_id": user["user_id"],
         "app": pkg,
@@ -130,16 +183,13 @@ async def log_activity(payload: dict, request: Request):
         "timestamp": utc()
     })
 
-    # daily aggregation
     await db.daily.update_one(
         {
             "child_id": user["user_id"],
             "date": today(),
             "app": pkg
         },
-        {
-            "$inc": {"duration": duration}
-        },
+        {"$inc": {"duration": duration}},
         upsert=True
     )
 
@@ -186,37 +236,6 @@ async def set_limit(payload: dict, request: Request):
     )
 
     return {"ok": True}
-
-@api.get("/limits/check")
-async def check_limits(request: Request):
-    user = await get_user(request)
-
-    limits = db.limits.find({"user_id": user["user_id"]})
-    activity = await daily_summary(request)
-
-    alerts = []
-
-    async for l in limits:
-        for a in activity:
-            if a["app"] == l["app"] and a["minutes"] > l["limit"]:
-
-                alert = {
-                    "app": a["app"],
-                    "used": a["minutes"],
-                    "limit": l["limit"]
-                }
-
-                alerts.append(alert)
-
-                token_doc = await db.tokens.find_one({"user_id": user["user_id"]})
-                if token_doc:
-                    send_push(
-                        token_doc["token"],
-                        "Limit Exceeded",
-                        f"{a['app']} used {a['minutes']} min"
-                    )
-
-    return alerts
 
 # ================= PUSH =================
 @api.post("/notifications/register")
