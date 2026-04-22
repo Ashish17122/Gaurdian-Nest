@@ -17,7 +17,6 @@ android {
         versionCode 1
         versionName "1.0.0"
 
-        // ✅ Fix BuildConfig
         buildConfigField "boolean", "IS_NEW_ARCHITECTURE_ENABLED", "false"
         buildConfigField "boolean", "IS_HERMES_ENABLED", "true"
     }
@@ -39,10 +38,14 @@ android {
             signingConfig signingConfigs.debug
             minifyEnabled false
             shrinkResources false
-            proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
         }
     }
 }
+
+project.ext.react = [
+    entryFile: "index.js",
+    bundleInRelease: true
+]
 
 dependencies {
     implementation("com.facebook.react:react-android")
