@@ -1,20 +1,22 @@
-import { useEffect } from "react";
+import { View, Button } from "react-native";
 import { router } from "expo-router";
-import { api } from "../src/api";
 
-export default function Index() {
-  useEffect(() => {
-    (async () => {
-      try {
-        const user = await api("/auth/me");
+export default function Home() {
+  return (
+    <View style={{ flex: 1, justifyContent: "center", gap: 20, padding: 20 }}>
+      
+      {/* 👨‍👩‍👧 Parent */}
+      <Button
+        title="I am Parent"
+        onPress={() => router.push("/login")}
+      />
 
-        if (user.role === "parent") router.replace("/parent");
-        else router.replace("/child");
-      } catch {
-        router.replace("/login");
-      }
-    })();
-  }, []);
+      {/* 📱 Child */}
+      <Button
+        title="I am Child"
+        onPress={() => router.push("/child")}
+      />
 
-  return null;
+    </View>
+  );
 }

@@ -9,7 +9,7 @@ WebBrowser.maybeCompleteAuthSession();
 
 export default function Login() {
   const [request, response, promptAsync] = Google.useAuthRequest({
-    expoClientId:
+    clientId:
       "786843635437-k0qqfgirae0jvgqfpss59jam2rmj7bs3.apps.googleusercontent.com",
     androidClientId:
       "786843635437-39ajq46i3i4ds5cf9ckp99g8eikn3kc7.apps.googleusercontent.com",
@@ -21,7 +21,7 @@ export default function Login() {
     }
   }, [response]);
 
-  const handleGoogleLogin = async (idToken: string | undefined) => {
+  const handleGoogleLogin = async (idToken?: string) => {
     try {
       if (!idToken) throw new Error("No Google token");
 
@@ -40,7 +40,11 @@ export default function Login() {
 
   return (
     <View style={{ padding: 20 }}>
-      <Button title="Continue with Google" onPress={() => promptAsync()} />
+      <Button
+        title="Continue with Google"
+        onPress={() => promptAsync()}
+        disabled={!request}
+      />
     </View>
   );
 }

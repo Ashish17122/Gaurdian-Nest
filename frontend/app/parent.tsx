@@ -1,77 +1,106 @@
 import { useEffect, useState } from "react";
-import { View, Text, ScrollView, StyleSheet } from "react-native";
+import {
+  View,
+  Text,
+  TextInput,
+  Button,
+  FlatList,
+} from "react-native";
 import { api } from "../src/api";
-import * as Notifications from "expo-notifications";
 
 export default function Parent() {
-  const [apps, setApps] = useState<any[]>([]);
-  const [alerts, setAlerts] = useState<any[]>([]);
+  const [code, setCode] = useState("");
+  const [data, setData] = useState<any[]>([]);
 
-  // 🔔 register push
-  useEffect(() => {
-    (async () => {
-      const { status } = await Notifications.requestPermissionsAsync();
-      if (status !== "granted") return;
-
-      const token = (await Notifications.getExpoPushTokenAsync()).data;
-
-      await api("/notifications/register", {
+  const linkChild = async () => {
+    try {
+      await api("/children/link", {
         method: "POST",
-        body: JSON.stringify({ token }),
+        body: JSON.stringify({ child_public_id: code }),
       });
-    })();
-  }, []);
 
-  // 🔄 live refresh every 5 sec
+      alert("Child linked successfully");
+      load();
+    } catch (e: any) {
+      alert(e.message);
+    }
+  };
+
+  const load = async () => {
+    try {
+      const res = await api("/activity/daily");
+      setData(res || []);
+    } catch (e) {
+      console.log(e);
+    }
+  };
+
   useEffect(() => {
-    const i = setInterval(async () => {
-      try {
-        const data = await api("/activity/daily");
-        const a = await api("/limits/check");
-
-        setApps(data);
-        setAlerts(a);
-      } catch (e) {}
-    }, 5000);
-
+    load();
+    const i = setInterval(load, 5000);
     return () => clearInterval(i);
   }, []);
 
   return (
-    <ScrollView style={styles.container}>
-      <Text style={styles.title}>Live Usage</Text>
+    <View style={{ flex: 1, padding: 20 }}>
+      
+      {/* LINK CHILD */}
+      <TextInput
+        placeholder="Enter child code"
+        value={code}
+        onChangeText={setCode}
+        style={{ borderWidth: 1, padding: 10, marginBottom: 10 }}
+      />
 
-      {apps.map((a, i) => (
-        <View key={i} style={styles.card}>
-          <Text style={styles.app}>{a.app}</Text>
-          <Text>{a.category}</Text>
-          <Text>{a.minutes} min</Text>
-        </View>
-      ))}
+      <Button title="Link Child" onPress={linkChild} />
 
-      {alerts.length > 0 && (
-        <>
-          <Text style={styles.alertTitle}>Alerts</Text>
-          {alerts.map((a, i) => (
-            <Text key={i}>
-              {a.app} exceeded ({a.used}/{a.limit})
+      {/* DASHBOARD */}
+      <FlatList
+        style={{ marginTop: 20 }}
+        data={data}
+        keyExtractor={(_, i) => i.toString()}
+        renderItem={({ item }) => (
+          <View
+            style={{
+              padding: 15,
+              marginVertical: 5,
+              borderRadius: 10,
+              backgroundColor: "#f2f2f2",
+            }}
+          >
+            <Text style={{ fontSize: 18, fontWeight: "bold" }}>
+              {item.app}
             </Text>
-          ))}
-        </>
-      )}
-    </ScrollView>
+
+            <Text style={{ color: "#666" }}>{item.category}</Text>
+
+            <View
+              style={{
+                height: 6,
+                backgroundColor: "#ddd",
+                marginVertical: 5,
+                borderRadius: 3,
+              }}
+            >
+              <View
+                style={{
+                  width: `${Math.min(item.minutes * 2, 100)}%`,
+                  backgroundColor: "#4CAF50",
+                  height: 6,
+                  borderRadius: 3,
+                }}
+              />
+            </View>
+
+            <Text>{item.minutes} min</Text>
+          </View>
+        )}
+        ListEmptyComponent={
+          <Text style={{ textAlign: "center", marginTop: 20 }}>
+            No activity yet
+          </Text>
+        }
+      />
+    </View>
   );
 }
-
-const styles = StyleSheet.create({
-  container: { flex: 1, padding: 20 },
-  title: { fontSize: 24, fontWeight: "bold" },
-  alertTitle: { marginTop: 20, fontSize: 18, color: "red" },
-  card: {
-    backgroundColor: "#fff",
-    padding: 12,
-    marginBottom: 10,
-    borderRadius: 8,
-  },
-  app: { fontSize: 18, fontWeight: "600" },
-});
