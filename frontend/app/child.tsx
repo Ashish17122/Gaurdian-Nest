@@ -1,28 +1,14 @@
 import { useEffect } from "react";
 import { View, Text, NativeModules } from "react-native";
 import { api } from "../src/api";
-import { useEffect } from "react";
-import { NativeModules } from "react-native";
 
 export default function Child() {
 
   useEffect(() => {
-    NativeModules.UsageModule.startService();
-  }, []);
+    // ✅ start native tracking service
+    NativeModules.UsageModule?.startService?.();
 
-  return null;
-}
-export default function Child() {
-
-  // Start native tracking service
-  useEffect(() => {
-    try {
-      NativeModules?.UsageModule?.startService?.();
-    } catch {}
-  }, []);
-
-  // Send location heartbeat
-  useEffect(() => {
+    // ✅ send heartbeat/location (optional)
     const i = setInterval(async () => {
       try {
         await api("/monitoring/heartbeat", {
@@ -39,8 +25,8 @@ export default function Child() {
   }, []);
 
   return (
-    <View style={{ padding: 20 }}>
-      <Text>Child device tracking active</Text>
+    <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
+      <Text>Child tracking active</Text>
     </View>
   );
 }

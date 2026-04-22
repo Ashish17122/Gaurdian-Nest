@@ -1,10 +1,9 @@
 from fastapi import FastAPI, APIRouter, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
-from datetime import datetime, timedelta
-import uuid, os
+from datetime import datetime
 from collections import defaultdict
-import requests
+import uuid, os, requests
 
 app = FastAPI()
 api = APIRouter(prefix="/api")
@@ -12,9 +11,12 @@ api = APIRouter(prefix="/api")
 client = AsyncIOMotorClient(os.environ["MONGO_URL"])
 db = client[os.environ["DB_NAME"]]
 
-# ================= UTILS =================
+# ================= UTIL =================
 def utc():
     return datetime.utcnow()
+
+def today():
+    return utc().date().isoformat()
 
 def new_id(p):
     return f"{p}_{uuid.uuid4().hex[:8]}"
@@ -108,26 +110,44 @@ async def log_activity(payload: dict, request: Request):
     user = await get_user(request)
 
     pkg = payload["app"]
+    duration = payload["duration"]
 
-    if not await db.apps.find_one({"package": pkg}):
-        await db.apps.insert_one({
+    # auto register app
+    app_doc = await db.apps.find_one({"package": pkg})
+    if not app_doc:
+        app_doc = {
             "package": pkg,
             "name": format_app_name(pkg),
             "category": get_category(pkg)
-        })
+        }
+        await db.apps.insert_one(app_doc)
 
+    # raw log
     await db.activity.insert_one({
         "child_id": user["user_id"],
         "app": pkg,
-        "duration": payload["duration"],
+        "duration": duration,
         "timestamp": utc()
     })
+
+    # daily aggregation
+    await db.daily.update_one(
+        {
+            "child_id": user["user_id"],
+            "date": today(),
+            "app": pkg
+        },
+        {
+            "$inc": {"duration": duration}
+        },
+        upsert=True
+    )
 
     return {"ok": True}
 
 # ================= SUMMARY =================
-@api.get("/activity/summary")
-async def summary(request: Request):
+@api.get("/activity/daily")
+async def daily_summary(request: Request):
     parent = await get_user(request)
 
     links = db.links.find({"parent_id": parent["user_id"]})
@@ -135,8 +155,11 @@ async def summary(request: Request):
 
     stats = defaultdict(int)
 
-    async for a in db.activity.find({"child_id": {"$in": child_ids}}):
-        stats[a["app"]] += a["duration"]
+    async for d in db.daily.find({
+        "child_id": {"$in": child_ids},
+        "date": today()
+    }):
+        stats[d["app"]] += d["duration"]
 
     result = []
 
@@ -151,32 +174,6 @@ async def summary(request: Request):
     result.sort(key=lambda x: -x["minutes"])
     return result
 
-# ================= DAILY =================
-@api.get("/activity/daily")
-async def daily(request: Request):
-    parent = await get_user(request)
-
-    links = db.links.find({"parent_id": parent["user_id"]})
-    child_ids = [l["child_id"] async for l in links]
-
-    stats = {}
-
-    for i in range(7):
-        day = (utc() - timedelta(days=i)).date().isoformat()
-        stats[day] = 0
-
-    async for a in db.activity.find({"child_id": {"$in": child_ids}}):
-        day = a["timestamp"].date().isoformat()
-        if day in stats:
-            stats[day] += a["duration"]
-
-    days = sorted(stats.keys())
-
-    return {
-        "labels": [d[5:] for d in days],
-        "data": [round(stats[d] / 60, 1) for d in days]
-    }
-
 # ================= LIMITS =================
 @api.post("/limits/set")
 async def set_limit(payload: dict, request: Request):
@@ -190,6 +187,37 @@ async def set_limit(payload: dict, request: Request):
 
     return {"ok": True}
 
+@api.get("/limits/check")
+async def check_limits(request: Request):
+    user = await get_user(request)
+
+    limits = db.limits.find({"user_id": user["user_id"]})
+    activity = await daily_summary(request)
+
+    alerts = []
+
+    async for l in limits:
+        for a in activity:
+            if a["app"] == l["app"] and a["minutes"] > l["limit"]:
+
+                alert = {
+                    "app": a["app"],
+                    "used": a["minutes"],
+                    "limit": l["limit"]
+                }
+
+                alerts.append(alert)
+
+                token_doc = await db.tokens.find_one({"user_id": user["user_id"]})
+                if token_doc:
+                    send_push(
+                        token_doc["token"],
+                        "Limit Exceeded",
+                        f"{a['app']} used {a['minutes']} min"
+                    )
+
+    return alerts
+
 # ================= PUSH =================
 @api.post("/notifications/register")
 async def register_token(payload: dict, request: Request):
@@ -202,35 +230,6 @@ async def register_token(payload: dict, request: Request):
     )
 
     return {"ok": True}
-
-@api.get("/limits/check")
-async def check_limits(request: Request):
-    user = await get_user(request)
-
-    limits = db.limits.find({"user_id": user["user_id"]})
-    activity = await summary(request)
-
-    alerts = []
-
-    async for l in limits:
-        for a in activity:
-            if a["app"] == l["app"] and a["minutes"] > l["limit"]:
-
-                alerts.append({
-                    "app": a["app"],
-                    "used": a["minutes"],
-                    "limit": l["limit"]
-                })
-
-                token_doc = await db.tokens.find_one({"user_id": user["user_id"]})
-                if token_doc:
-                    send_push(
-                        token_doc["token"],
-                        "Limit Exceeded",
-                        f"{a['app']} exceeded limit"
-                    )
-
-    return alerts
 
 # ================= CORS =================
 app.add_middleware(
