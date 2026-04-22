@@ -42,8 +42,9 @@ android {
     }
 }
 
+// ✅ THIS IS THE FIX
 project.ext.react = [
-    entryFile: "index.js",
+    entryFile: "node_modules/expo-router/entry.js",
     bundleInRelease: true
 ]
 
