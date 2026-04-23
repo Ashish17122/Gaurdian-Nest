@@ -33,6 +33,8 @@ DB_NAME = os.getenv("DB_NAME")
 if not MONGO_URL or not DB_NAME:
     raise Exception("❌ Missing MONGO_URL or DB_NAME")
 
+ADMIN_EMAIL = "ashishworksat@gmail.com"
+
 # ================= APP =================
 app = FastAPI()
 api = APIRouter(prefix="/api")
@@ -56,20 +58,27 @@ def format_app_name(pkg: str):
     except:
         return pkg
 
-def get_category(pkg: str):
-    if "youtube" in pkg: return "Video"
-    if "instagram" in pkg or "facebook" in pkg: return "Social"
-    if "whatsapp" in pkg: return "Messaging"
-    if "chrome" in pkg: return "Browsing"
-    return "Other"
-
 # ================= AUTH =================
 async def get_user(request: Request):
     token = request.headers.get("Authorization", "").replace("Bearer ", "")
+    if not token:
+        raise HTTPException(401, "Missing token")
+
     session = await db.sessions.find_one({"session_token": token})
     if not session:
         raise HTTPException(401, "Unauthorized")
-    return await db.users.find_one({"user_id": session["user_id"]})
+
+    user = await db.users.find_one({"user_id": session["user_id"]})
+    if not user:
+        raise HTTPException(401, "User not found")
+
+    return user
+
+async def require_admin(request: Request):
+    user = await get_user(request)
+    if not user.get("is_admin"):
+        raise HTTPException(403, "Admin only")
+    return user
 
 # ================= HEALTH =================
 @app.get("/")
@@ -81,7 +90,6 @@ def health():
 async def google_login(payload: dict):
     try:
         token = payload.get("token")
-
         if not token:
             raise HTTPException(400, "Missing token")
 
@@ -109,35 +117,34 @@ async def google_login(payload: dict):
             }
             await db.users.insert_one(user)
 
-        # 🔐 ADMIN LOGIC (SECURE)
-        is_admin = email == "ashishworksat@gmail.com"
+        is_admin = email == ADMIN_EMAIL
 
         await db.users.update_one(
             {"user_id": user["user_id"]},
             {
                 "$set": {
                     "is_admin": is_admin,
-                    "role": "admin" if is_admin else "parent"
+                    "role": "admin" if is_admin else user.get("role", "parent")
                 }
             }
         )
 
-        # refresh user
         user = await db.users.find_one({"user_id": user["user_id"]})
 
         session_token = "tok_" + uuid.uuid4().hex
 
         await db.sessions.insert_one({
             "user_id": user["user_id"],
-            "session_token": session_token
+            "session_token": session_token,
+            "created_at": utc()
         })
 
-        # ✅ FIX: return user ALSO
         return {
             "user": {
                 "email": user["email"],
                 "role": user.get("role", "parent"),
-                "is_admin": user.get("is_admin", False)
+                "is_admin": user.get("is_admin", False),
+                "child_public_id": user.get("child_public_id")
             },
             "session_token": session_token
         }
@@ -147,32 +154,26 @@ async def google_login(payload: dict):
         traceback.print_exc()
         raise HTTPException(401, "Invalid Google token")
 
-# ================= MOCK LOGIN =================
-@api.post("/auth/mock-login")
-async def login(payload: dict):
-    email = payload["email"]
-    role = payload.get("role", "parent")
+# ================= CHILD CREATE =================
+@api.post("/children/create")
+async def create_child(request: Request):
+    parent = await get_user(request)
 
-    user = await db.users.find_one({"email": email})
+    child = {
+        "user_id": new_id("usr"),
+        "role": "child",
+        "child_public_id": new_id("CHILD"),
+        "created_at": utc()
+    }
 
-    if not user:
-        user = {
-            "user_id": new_id("usr"),
-            "email": email,
-            "role": role,
-            "child_public_id": new_id("CHILD") if role == "child" else None,
-            "created_at": utc()
-        }
-        await db.users.insert_one(user)
+    await db.users.insert_one(child)
 
-    token = "tok_" + uuid.uuid4().hex
-
-    await db.sessions.insert_one({
-        "user_id": user["user_id"],
-        "session_token": token
+    await db.links.insert_one({
+        "parent_id": parent["user_id"],
+        "child_id": child["user_id"]
     })
 
-    return {"user": user, "session_token": token}
+    return {"child_public_id": child["child_public_id"]}
 
 # ================= LINK =================
 @api.post("/children/link")
@@ -185,6 +186,14 @@ async def link(payload: dict, request: Request):
 
     if not child:
         raise HTTPException(404, "Child not found")
+
+    existing = await db.links.find_one({
+        "parent_id": parent["user_id"],
+        "child_id": child["user_id"]
+    })
+
+    if existing:
+        return {"ok": True}
 
     await db.links.insert_one({
         "parent_id": parent["user_id"],
@@ -251,17 +260,12 @@ async def daily_summary(request: Request):
 # ================= AI =================
 @api.get("/ai/insights")
 async def ai_insights(request: Request):
-    try:
-        parent = await get_user(request)
+    parent = await get_user(request)
 
-        links = db.links.find({"parent_id": parent["user_id"]})
-        child_ids = [l["child_id"] async for l in links]
+    links = db.links.find({"parent_id": parent["user_id"]})
+    child_ids = [l["child_id"] async for l in links]
 
-        return await generate_insights(db, child_ids)
-
-    except Exception as e:
-        print("❌ AI ERROR:", str(e))
-        return {"message": "AI failed"}
+    return await generate_insights(db, child_ids)
 
 # ================= LIMIT =================
 @api.get("/limits/check")
@@ -321,6 +325,20 @@ async def get_location(request: Request):
 
     loc = await db.locations.find_one({"child_id": link["child_id"]})
     return loc or {}
+
+# ================= ADMIN =================
+@api.get("/admin/users")
+async def admin_users(request: Request):
+    await require_admin(request)
+
+    users = []
+    async for u in db.users.find():
+        users.append({
+            "email": u.get("email"),
+            "role": u.get("role")
+        })
+
+    return users
 
 # ================= CORS =================
 app.add_middleware(
