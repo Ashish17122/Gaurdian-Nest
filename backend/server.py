@@ -10,7 +10,7 @@ from google.auth.transport import requests as grequests
 
 # ================= SAFE IMPORTS =================
 try:
-    from notification import check_and_notify_limits
+    from notifications import check_and_notify_limits
 except:
     async def check_and_notify_limits(*args, **kwargs):
         print("⚠️ notification module missing")
