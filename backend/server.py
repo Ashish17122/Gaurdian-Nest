@@ -173,8 +173,10 @@ async def create_child(request: Request):
         "child_id": child["user_id"]
     })
 
-    return {"child_public_id": child["child_public_id"]}
-
+    return {
+        "child_public_id": child["child_public_id"],
+        "child_id": child["user_id"]
+    }
 # ================= LINK =================
 @api.post("/children/link")
 async def link(payload: dict, request: Request):
