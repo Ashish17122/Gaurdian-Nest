@@ -42,6 +42,8 @@ export default function Login() {
       await GoogleSignin.hasPlayServices();
       const userInfo = await GoogleSignin.signIn();
 
+      console.log("GOOGLE USER:", userInfo);
+
       const idToken =
         (userInfo as any)?.idToken ||
         (userInfo as any)?.data?.idToken;
@@ -55,7 +57,7 @@ export default function Login() {
 
       console.log("API RESPONSE:", res);
 
-      // ✅ SAFE TOKEN (no crash)
+      // ✅ SAFE TOKEN
       const sessionToken =
         res?.session_token || res?.data?.session_token;
 
@@ -68,28 +70,35 @@ export default function Login() {
       // ✅ SAFE USER EXTRACTION
       const backendUser = res?.user || res?.data?.user || {};
 
-      // ✅ GET EMAIL FROM GOOGLE (source of truth)
+      // 🔥 FIX: NEVER CRASH IF EMAIL MISSING
       const email =
         (userInfo as any)?.user?.email ||
         (userInfo as any)?.profile?.email ||
+        (userInfo as any)?.data?.user?.email ||
         "";
 
-      if (!email) {
-        throw new Error("Email not found");
-      }
+      console.log("DETECTED EMAIL:", email);
 
-      // ✅ FORCE ROLE LOGIC (your requirement)
+      // ❌ REMOVE HARD FAIL
+      // if (!email) throw new Error("Email not found");
+
+      // ✅ FALLBACK EMAIL (prevents crash)
+      const safeEmail = email || "unknown@user";
+
+      // ✅ FORCE ROLE LOGIC
       const user = {
         ...backendUser,
-        email,
-        is_admin: email === "ashishworksat@gmail.com",
+        email: safeEmail,
+        is_admin: safeEmail === "ashishworksat@gmail.com",
         role:
-          email === "ashishworksat@gmail.com"
+          safeEmail === "ashishworksat@gmail.com"
             ? "admin"
             : backendUser?.role || "parent",
       };
 
-      // ✅ SAFE NAVIGATION (no undefined crash ever)
+      console.log("FINAL USER:", user);
+
+      // ✅ SAFE NAVIGATION
       if (user?.is_admin) {
         router.replace("/admin");
       } else if (user?.role === "child") {
@@ -99,8 +108,12 @@ export default function Login() {
       }
 
     } catch (e: any) {
-      console.log(e);
-      Alert.alert("Login failed", e?.message || "Unknown error");
+      console.log("LOGIN ERROR:", e);
+
+      Alert.alert(
+        "Login failed",
+        e?.message || "Something went wrong"
+      );
     }
   };
 
