@@ -82,6 +82,9 @@ async def google_login(payload: dict):
     try:
         token = payload.get("token")
 
+        if not token:
+            raise HTTPException(400, "Missing token")
+
         idinfo = id_token.verify_oauth2_token(
             token,
             grequests.Request(),
@@ -89,6 +92,10 @@ async def google_login(payload: dict):
         )
 
         email = idinfo.get("email")
+        name = idinfo.get("name")
+
+        if not email:
+            raise HTTPException(400, "No email")
 
         user = await db.users.find_one({"email": email})
 
@@ -96,10 +103,27 @@ async def google_login(payload: dict):
             user = {
                 "user_id": new_id("usr"),
                 "email": email,
+                "name": name,
                 "role": "parent",
                 "created_at": utc()
             }
             await db.users.insert_one(user)
+
+        # 🔐 ADMIN LOGIC (SECURE)
+        is_admin = email == "ashishworksat@gmail.com"
+
+        await db.users.update_one(
+            {"user_id": user["user_id"]},
+            {
+                "$set": {
+                    "is_admin": is_admin,
+                    "role": "admin" if is_admin else "parent"
+                }
+            }
+        )
+
+        # refresh user
+        user = await db.users.find_one({"user_id": user["user_id"]})
 
         session_token = "tok_" + uuid.uuid4().hex
 
@@ -108,7 +132,15 @@ async def google_login(payload: dict):
             "session_token": session_token
         })
 
-        return {"session_token": session_token}
+        # ✅ FIX: return user ALSO
+        return {
+            "user": {
+                "email": user["email"],
+                "role": user.get("role", "parent"),
+                "is_admin": user.get("is_admin", False)
+            },
+            "session_token": session_token
+        }
 
     except Exception as e:
         print("❌ GOOGLE ERROR:", str(e))
@@ -225,22 +257,7 @@ async def ai_insights(request: Request):
         links = db.links.find({"parent_id": parent["user_id"]})
         child_ids = [l["child_id"] async for l in links]
 
-        total = 0
-        app_usage = {}
-
-        async for d in db.daily.find({"child_id": {"$in": child_ids}}):
-            app_usage[d["app"]] = app_usage.get(d["app"], 0) + d["duration"]
-            total += d["duration"]
-
-        if total == 0:
-            return {"message": "No data yet"}
-
-        top_app = max(app_usage, key=app_usage.get)
-
-        return {
-            "total_hours": round(total / 3600, 2),
-            "top_app": top_app
-        }
+        return await generate_insights(db, child_ids)
 
     except Exception as e:
         print("❌ AI ERROR:", str(e))

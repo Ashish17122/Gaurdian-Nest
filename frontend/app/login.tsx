@@ -47,23 +47,57 @@ export default function Login() {
         (userInfo as any)?.data?.idToken;
 
       if (!idToken) throw new Error("No ID token");
-      
+
       const res = await api("/auth/google", {
         method: "POST",
         body: JSON.stringify({ token: idToken }),
       });
 
-      // ✅ Store session
-      await setToken(res.session_token);
+      console.log("API RESPONSE:", res);
 
-      // ✅ Navigate based on role
-      if (res.user.is_admin) {
+      // ✅ SAFE TOKEN (no crash)
+      const sessionToken =
+        res?.session_token || res?.data?.session_token;
+
+      if (!sessionToken) {
+        throw new Error("Session token missing");
+      }
+
+      await setToken(sessionToken);
+
+      // ✅ SAFE USER EXTRACTION
+      const backendUser = res?.user || res?.data?.user || {};
+
+      // ✅ GET EMAIL FROM GOOGLE (source of truth)
+      const email =
+        (userInfo as any)?.user?.email ||
+        (userInfo as any)?.profile?.email ||
+        "";
+
+      if (!email) {
+        throw new Error("Email not found");
+      }
+
+      // ✅ FORCE ROLE LOGIC (your requirement)
+      const user = {
+        ...backendUser,
+        email,
+        is_admin: email === "ashishworksat@gmail.com",
+        role:
+          email === "ashishworksat@gmail.com"
+            ? "admin"
+            : backendUser?.role || "parent",
+      };
+
+      // ✅ SAFE NAVIGATION (no undefined crash ever)
+      if (user?.is_admin) {
         router.replace("/admin");
-      } else if (res.user.role === "child") {
+      } else if (user?.role === "child") {
         router.replace("/child");
       } else {
         router.replace("/parent");
       }
+
     } catch (e: any) {
       console.log(e);
       Alert.alert("Login failed", e?.message || "Unknown error");
