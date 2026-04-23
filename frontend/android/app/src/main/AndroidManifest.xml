@@ -15,6 +15,9 @@
       android:enabled="true"
       android:exported="false"/>
     <application
+      <meta-data
+      android:name="com.google.android.geo.API_KEY"
+      android:value="AIzaSyCqzC-JMxE4UAYE2fEvzHHNfoPqi9sg3Q0"
         android:name=".MainApplication"
         android:label="GuardianNest"
         android:icon="@mipmap/ic_launcher"
