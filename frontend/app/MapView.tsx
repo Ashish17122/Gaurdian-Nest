@@ -1,17 +1,17 @@
 // @ts-nocheck
-import { useEffect, useRef } from "react";
+import React, { useEffect, useRef } from "react";
 import { View, Text } from "react-native";
-import MapView, { Marker } from "react-native-maps";
+import MapView, { Marker, PROVIDER_GOOGLE } from "react-native-maps";
 
 export default function Map({ location }: any) {
   const mapRef = useRef<any>(null);
 
   useEffect(() => {
-    if (location && mapRef.current) {
+    if (location?.lat && location?.lng && mapRef.current) {
       mapRef.current.animateToRegion(
         {
-          latitude: location.lat,
-          longitude: location.lng,
+          latitude: Number(location.lat),
+          longitude: Number(location.lng),
           latitudeDelta: 0.01,
           longitudeDelta: 0.01,
         },
@@ -38,19 +38,20 @@ export default function Map({ location }: any) {
 
   return (
     <MapView
+      provider={PROVIDER_GOOGLE} // ✅ IMPORTANT
       ref={mapRef}
       style={{ height: 200, borderRadius: 10 }}
       initialRegion={{
-        latitude: location.lat,
-        longitude: location.lng,
+        latitude: Number(location.lat),
+        longitude: Number(location.lng),
         latitudeDelta: 0.01,
         longitudeDelta: 0.01,
       }}
     >
       <Marker
         coordinate={{
-          latitude: location.lat,
-          longitude: location.lng,
+          latitude: Number(location.lat),
+          longitude: Number(location.lng),
         }}
         title="Child Device"
       />
