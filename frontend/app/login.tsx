@@ -6,11 +6,10 @@ import {
   StyleSheet,
   Alert,
 } from "react-native";
-import { useLocalSearchParams } from "expo-router";
+import { useLocalSearchParams, router } from "expo-router";
 import { GoogleSignin } from "@react-native-google-signin/google-signin";
 import { api, setToken } from "../src/api";
 import { registerPush } from "../src/notifications";
-import { router } from "expo-router";
 
 export default function Login() {
   const { role = "parent", admin_code } = useLocalSearchParams();
@@ -33,33 +32,41 @@ export default function Login() {
           body: JSON.stringify({ token }),
         });
       }
-    } catch {}
+    } catch (e) {
+      console.log("Push register failed", e);
+    }
   };
 
   const signIn = async () => {
     try {
       await GoogleSignin.hasPlayServices();
-      const user: any = await GoogleSignin.signIn();
+      const userInfo = await GoogleSignin.signIn();
 
-      const idToken = user.data?.idToken;
+      const idToken =
+        (userInfo as any)?.idToken ||
+        (userInfo as any)?.data?.idToken;
+
       if (!idToken) throw new Error("No ID token");
-
+      
       const res = await api("/auth/google", {
         method: "POST",
-        body: JSON.stringify({
-          token: idToken,
-          role,
-          admin_code,
-        }),
+        body: JSON.stringify({ token: idToken }),
       });
 
+      // ✅ Store session
       await setToken(res.session_token);
 
-      if (res.user.is_admin) router.replace("/admin");
-      else if (res.user.role === "child") router.replace("/child");
-      else router.replace("/parent");
+      // ✅ Navigate based on role
+      if (res.user.is_admin) {
+        router.replace("/admin");
+      } else if (res.user.role === "child") {
+        router.replace("/child");
+      } else {
+        router.replace("/parent");
+      }
     } catch (e: any) {
-      Alert.alert("Login failed", e.message);
+      console.log(e);
+      Alert.alert("Login failed", e?.message || "Unknown error");
     }
   };
 
@@ -75,8 +82,26 @@ export default function Login() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, justifyContent: "center", padding: 24, backgroundColor: "#0B1F2A" },
-  title: { fontSize: 34, color: "#fff", marginBottom: 30 },
-  btn: { backgroundColor: "#fff", padding: 16, borderRadius: 12, alignItems: "center" },
-  btnText: { fontWeight: "600" },
+  container: {
+    flex: 1,
+    justifyContent: "center",
+    padding: 24,
+    backgroundColor: "#0B1F2A",
+  },
+  title: {
+    fontSize: 34,
+    color: "#fff",
+    marginBottom: 30,
+    fontWeight: "bold",
+  },
+  btn: {
+    backgroundColor: "#fff",
+    padding: 16,
+    borderRadius: 12,
+    alignItems: "center",
+  },
+  btnText: {
+    fontWeight: "600",
+    fontSize: 16,
+  },
 });

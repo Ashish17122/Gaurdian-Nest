@@ -8,17 +8,20 @@
     "scheme": "guardiannest",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
-    "assetBundlePatterns": ["**/*"],
-
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "app.guardiannest",
       "infoPlist": {
         "NSUserNotificationsUsageDescription": "Show monitoring status to your family",
-        "UIBackgroundModes": ["fetch", "remote-notification"]
+        "UIBackgroundModes": [
+          "fetch",
+          "remote-notification"
+        ]
       }
     },
-
     "android": {
       "package": "app.guardiannest",
       "versionCode": 1,
@@ -27,9 +30,7 @@
         "backgroundColor": "#09637E"
       },
       "edgeToEdgeEnabled": true,
-
       "googleServicesFile": "./android/app/google-services.json",
-
       "permissions": [
         "INTERNET",
         "POST_NOTIFICATIONS",
@@ -37,26 +38,20 @@
         "FOREGROUND_SERVICE",
         "FOREGROUND_SERVICE_LOCATION",
         "WAKE_LOCK",
-
         "ACCESS_FINE_LOCATION",
         "ACCESS_COARSE_LOCATION",
         "ACCESS_BACKGROUND_LOCATION",
-
         "PACKAGE_USAGE_STATS",
         "QUERY_ALL_PACKAGES"
       ]
     },
-
     "web": {
       "bundler": "metro",
       "output": "static",
       "favicon": "./assets/images/favicon.png"
     },
-
     "plugins": [
       "expo-router",
-
-
       [
         "expo-splash-screen",
         {
@@ -66,7 +61,6 @@
           "backgroundColor": "#EBF4F6"
         }
       ],
-
       [
         "expo-notifications",
         {
@@ -75,25 +69,21 @@
           "mode": "production"
         }
       ],
-
-      "expo-font"
+      "expo-font",
+      "@react-native-google-signin/google-signin"
     ],
-
     "experiments": {
       "typedRoutes": true
     },
-
     "updates": {
       "fallbackToCacheTimeout": 0
     },
-
     "extra": {
       "router": {},
       "eas": {
         "projectId": "0da41c15-390a-4442-930f-d905477b3d90"
       }
     },
-
     "owner": "ashishsharma007"
   }
 }
