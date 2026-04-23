@@ -2,67 +2,49 @@ package app.guardiannest
 
 import android.app.Service
 import android.content.Intent
-import android.location.Location
 import android.os.IBinder
 import android.os.Looper
 import android.util.Log
+
 import com.google.android.gms.location.*
-import kotlinx.coroutines.*
-import java.net.HttpURLConnection
-import java.net.URL
-import org.json.JSONObject
 
 class LocationService : Service() {
 
-    private lateinit var fusedClient: FusedLocationProviderClient
+    private lateinit var fusedLocationClient: FusedLocationProviderClient
+    private lateinit var locationCallback: LocationCallback
 
     override fun onCreate() {
         super.onCreate()
-        fusedClient = LocationServices.getFusedLocationProviderClient(this)
-        startTracking()
-    }
 
-    override fun onBind(intent: Intent?): IBinder? = null
+        fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
 
-    private fun startTracking() {
-        val request = LocationRequest.Builder(
+        val locationRequest = LocationRequest.Builder(
             Priority.PRIORITY_HIGH_ACCURACY,
-            10000
+            5000
         ).build()
 
-        fusedClient.requestLocationUpdates(
-            request,
-            object : LocationCallback() {
-                override fun onLocationResult(result: LocationResult) {
-                    val loc = result.lastLocation ?: return
-                    sendLocation(loc)
+        locationCallback = object : LocationCallback() {
+            override fun onLocationResult(result: LocationResult) {
+                val location = result.lastLocation
+                if (location != null) {
+                    Log.d("LOCATION", "${location.latitude}, ${location.longitude}")
                 }
-            },
+            }
+        }
+
+        fusedLocationClient.requestLocationUpdates(
+            locationRequest,
+            locationCallback,
             Looper.getMainLooper()
         )
     }
 
-    private fun sendLocation(loc: Location) {
-        CoroutineScope(Dispatchers.IO).launch {
-            try {
-                val url = URL("https://gaurdian-nest.onrender.com/api/location/update")
+    override fun onBind(intent: Intent?): IBinder? {
+        return null
+    }
 
-                val conn = url.openConnection() as HttpURLConnection
-                conn.requestMethod = "POST"
-                conn.setRequestProperty("Content-Type", "application/json")
-                conn.doOutput = true
-
-                val json = JSONObject()
-                json.put("lat", loc.latitude)
-                json.put("lng", loc.longitude)
-
-                conn.outputStream.write(json.toString().toByteArray())
-                conn.outputStream.close()
-
-                conn.responseCode
-            } catch (e: Exception) {
-                Log.e("LocationService", e.message ?: "error")
-            }
-        }
+    override fun onDestroy() {
+        super.onDestroy()
+        fusedLocationClient.removeLocationUpdates(locationCallback)
     }
 }
