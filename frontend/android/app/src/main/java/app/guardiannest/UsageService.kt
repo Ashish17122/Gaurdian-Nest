@@ -2,80 +2,88 @@ package app.guardiannest
 
 import android.app.Service
 import android.app.usage.UsageStatsManager
-import android.content.Context
 import android.content.Intent
 import android.os.IBinder
-import android.util.Log
-import kotlinx.coroutines.*
-import java.net.HttpURLConnection
-import java.net.URL
+import android.os.Handler
+import android.os.Looper
+import android.app.ActivityManager
+import android.content.Context
+import okhttp3.*
 import org.json.JSONObject
+import java.util.concurrent.TimeUnit
 
 class UsageService : Service() {
 
-    private var lastApp: String = ""
+    private val handler = Handler(Looper.getMainLooper())
+    private val client = OkHttpClient()
 
-    override fun onBind(intent: Intent?): IBinder? = null
+    private val runnable = object : Runnable {
+        override fun run() {
+            sendUsage()
+            handler.postDelayed(this, 10000) // every 10s
+        }
+    }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-
-        CoroutineScope(Dispatchers.IO).launch {
-            while (true) {
-                try {
-                    val app = getForegroundApp()
-
-                    if (app != null && app != lastApp) {
-                        sendToBackend(app)
-                        lastApp = app
-                    }
-
-                    delay(5000)
-                } catch (e: Exception) {
-                    Log.e("UsageService", "Error: ${e.message}")
-                }
-            }
-        }
-
+        handler.post(runnable)
         return START_STICKY
     }
 
-    private fun getForegroundApp(): String? {
-        val usm = getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
-        val time = System.currentTimeMillis()
-
-        val stats = usm.queryUsageStats(
-            UsageStatsManager.INTERVAL_DAILY,
-            time - 10000,
-            time
-        )
-
-        if (stats.isNullOrEmpty()) return null
-
-        val recent = stats.maxByOrNull { it.lastTimeUsed }
-        return recent?.packageName
+    override fun onDestroy() {
+        handler.removeCallbacks(runnable)
+        super.onDestroy()
     }
 
-    private fun sendToBackend(pkg: String) {
-        try {
-            val url = URL("https://gaurdian-nest.onrender.com/api/activity/log")
-            val conn = url.openConnection() as HttpURLConnection
+    override fun onBind(intent: Intent?): IBinder? = null
 
-            conn.requestMethod = "POST"
-            conn.setRequestProperty("Content-Type", "application/json")
-            conn.doOutput = true
+    private fun getForegroundApp(): String {
+        val usageStatsManager =
+            getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
 
-            val json = JSONObject()
-            json.put("app", pkg)
-            json.put("duration", 5)
+        val end = System.currentTimeMillis()
+        val start = end - 10000
 
-            conn.outputStream.write(json.toString().toByteArray())
-            conn.outputStream.flush()
-            conn.outputStream.close()
+        val stats = usageStatsManager.queryUsageStats(
+            UsageStatsManager.INTERVAL_DAILY,
+            start,
+            end
+        )
 
-            conn.responseCode
+        if (stats.isEmpty()) return "unknown"
 
-        } catch (e: Exception) {
-            Log.e("UsageService", "Send error: ${e.message}")
-        }
+        val recent = stats.maxByOrNull { it.lastTimeUsed }
+        return recent?.packageName ?: "unknown"
+    }
+
+    private fun sendUsage() {
+        val app = getForegroundApp()
+
+        val json = JSONObject()
+        json.put("app", app)
+        json.put("duration", 10)
+        json.put("child_id", getChildId())
+
+        val body = RequestBody.create(
+            MediaType.parse("application/json"),
+            json.toString()
+        )
+
+        val request = Request.Builder()
+            .url("https://gaurdian-nest.onrender.com/api/activity/log")
+            .post(body)
+            .build()
+
+        client.newCall(request).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {}
+
+            override fun onResponse(call: Call, response: Response) {
+                response.close()
+            }
+        })
+    }
+
+    private fun getChildId(): String {
+        val prefs = getSharedPreferences("GN", Context.MODE_PRIVATE)
+        return prefs.getString("child_id", "") ?: ""
     }
 }
