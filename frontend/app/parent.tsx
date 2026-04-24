@@ -4,42 +4,43 @@ import {
   Text,
   View,
   StyleSheet,
+  TouchableOpacity,
   Dimensions,
   ActivityIndicator,
-  TextInput,
-  Button,
-  Alert,
 } from "react-native";
 import { BarChart } from "react-native-chart-kit";
 import { api } from "../src/api";
-import Map from "./MapView";
 
 const width = Dimensions.get("window").width;
 
 export default function Parent() {
+  const [children, setChildren] = useState<any[]>([]);
+  const [selected, setSelected] = useState<string | null>(null);
   const [apps, setApps] = useState<any[]>([]);
-  const [alerts, setAlerts] = useState<any[]>([]);
-  const [location, setLocation] = useState<any>(null);
-  const [code, setCode] = useState("");
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    load();
-    const i = setInterval(load, 3000);
-    return () => clearInterval(i);
+    loadChildren();
   }, []);
 
-  const load = async () => {
-    try {
-      const [activity, alertData, loc] = await Promise.all([
-        api("/activity/daily"),
-        api("/limits/check"),
-        api("/location/latest"),
-      ]);
+  useEffect(() => {
+    if (selected) loadData();
+  }, [selected]);
 
-      setApps(activity || []);
-      setAlerts(alertData || []);
-      setLocation(loc || null);
+  const loadChildren = async () => {
+    try {
+      const res = await api("/children/list");
+      setChildren(res);
+      if (res.length > 0) setSelected(res[0].child_id);
+    } catch (e) {
+      console.log(e);
+    }
+  };
+
+  const loadData = async () => {
+    try {
+      const res = await api(`/activity/daily?child_id=${selected}`);
+      setApps(res || []);
     } catch (e) {
       console.log(e);
     } finally {
@@ -47,109 +48,147 @@ export default function Parent() {
     }
   };
 
-  const linkChild = async () => {
-    try {
-      await api("/children/link", {
-        method: "POST",
-        body: JSON.stringify({ child_public_id: code }),
-      });
-
-      Alert.alert("Child linked!");
-      setCode("");
-      load();
-    } catch (e: any) {
-      Alert.alert("Error", e.message);
-    }
-  };
-
   const chartData = {
-    labels: apps.map((a) => a.app?.slice(0, 5) || "App"),
+    labels: apps.map((a) => a.app?.slice(0, 6) || "App"),
     datasets: [{ data: apps.map((a) => a.minutes || 0) }],
   };
 
-  if (loading) return <ActivityIndicator />;
-
   return (
     <ScrollView style={styles.container}>
-      <Text style={styles.header}>Parent Dashboard</Text>
+      {/* HEADER */}
+      <Text style={styles.header}>GuardianNest</Text>
 
-      {/* 🔥 LINK CHILD */}
-      <View style={styles.card}>
-        <Text style={styles.title}>Add Child</Text>
-        <TextInput
-          placeholder="Enter Child Code"
-          value={code}
-          onChangeText={setCode}
-          style={styles.input}
-        />
-        <Button title="Link Child" onPress={linkChild} />
+      {/* CHILD SELECTOR */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Devices</Text>
+
+        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+          {children.map((c) => (
+            <TouchableOpacity
+              key={c.child_id}
+              onPress={() => setSelected(c.child_id)}
+              style={[
+                styles.childCard,
+                selected === c.child_id && styles.activeChild,
+              ]}
+            >
+              <Text style={styles.childCode}>{c.code}</Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
       </View>
 
-      {/* 📊 CHART */}
-      <View style={styles.card}>
-        <Text style={styles.title}>Usage</Text>
-        {apps.length > 0 ? (
-          <BarChart
-            data={chartData}
-            width={width - 40}
-            height={220}
-            yAxisLabel=""   // ✅ FIX
-            yAxisSuffix="m"
-            fromZero
-            chartConfig={{
-              backgroundColor: "#000",
-              backgroundGradientFrom: "#000",
-              backgroundGradientTo: "#000",
-              color: () => "#00C9A7",
-            }}
-          />
-        ) : (
-          <Text>No data</Text>
-        )}
-      </View>
+      {/* LOADING */}
+      {loading ? (
+        <ActivityIndicator size="large" color="#00C9A7" />
+      ) : (
+        <>
+          {/* CHART */}
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>📊 App Usage</Text>
 
-      {/* 📍 LOCATION */}
-      <View style={styles.card}>
-        <Text style={styles.title}>Live Location</Text>
-        <Map location={location} />
-      </View>
+            {apps.length > 0 ? (
+              <BarChart
+                data={chartData}
+                width={width - 40}
+                height={220}
+                yAxisLabel=""
+                yAxisSuffix="m"
+                fromZero
+                showValuesOnTopOfBars
+                chartConfig={{
+                  backgroundColor: "#132F3D",
+                  backgroundGradientFrom: "#132F3D",
+                  backgroundGradientTo: "#132F3D",
+                  decimalPlaces: 0,
+                  color: (opacity = 1) =>
+                    `rgba(0, 201, 167, ${opacity})`,
+                  labelColor: () => "#ffffff",
+                }}
+                style={{ borderRadius: 12 }}
+              />
+            ) : (
+              <Text style={styles.empty}>No usage data yet</Text>
+            )}
+          </View>
 
-      {/* 🔔 ALERTS */}
-      <View style={styles.card}>
-        <Text style={styles.title}>Alerts</Text>
-        {alerts.map((a, i) => (
-          <Text key={i} style={{ color: "red" }}>
-            {a.app} exceeded
-          </Text>
-        ))}
-      </View>
+          {/* LIST */}
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>📱 Detailed Usage</Text>
+
+            {apps.length === 0 ? (
+              <Text style={styles.empty}>No data</Text>
+            ) : (
+              apps.map((a, i) => (
+                <View key={i} style={styles.rowItem}>
+                  <Text style={styles.appName}>{a.app}</Text>
+                  <Text style={styles.appTime}>{a.minutes} min</Text>
+                </View>
+              ))
+            )}
+          </View>
+        </>
+      )}
     </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
-    padding: 20,
+    flex: 1,
     backgroundColor: "#0B1F2A",
+    padding: 16,
   },
   header: {
-    fontSize: 26,
+    fontSize: 28,
     color: "#fff",
+    fontWeight: "bold",
     marginBottom: 20,
+  },
+  section: {
+    marginBottom: 20,
+  },
+  sectionTitle: {
+    color: "#aaa",
+    marginBottom: 10,
+  },
+  childCard: {
+    backgroundColor: "#132F3D",
+    padding: 14,
+    borderRadius: 12,
+    marginRight: 10,
+  },
+  activeChild: {
+    backgroundColor: "#00C9A7",
+  },
+  childCode: {
+    color: "#fff",
+    fontWeight: "bold",
   },
   card: {
     backgroundColor: "#132F3D",
     padding: 16,
+    borderRadius: 14,
     marginBottom: 16,
-    borderRadius: 10,
   },
-  title: {
+  cardTitle: {
     color: "#fff",
+    fontWeight: "600",
     marginBottom: 10,
   },
-  input: {
-    backgroundColor: "#fff",
-    padding: 10,
-    marginBottom: 10,
+  rowItem: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginBottom: 8,
+  },
+  appName: {
+    color: "#ddd",
+  },
+  appTime: {
+    color: "#00C9A7",
+    fontWeight: "bold",
+  },
+  empty: {
+    color: "#888",
   },
 });

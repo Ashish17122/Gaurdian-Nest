@@ -1,370 +1,182 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from datetime import datetime
 from collections import defaultdict
-import uuid, os, traceback, requests
+import uuid, os
 
-from google.oauth2 import id_token
-from google.auth.transport import requests as grequests
+app = FastAPI()
 
-# ================= SAFE IMPORTS =================
-try:
-    from notifications import check_and_notify_limits
-except:
-    async def check_and_notify_limits(*args, **kwargs):
-        print("⚠️ notification module missing")
-
-try:
-    from insights import generate_insights
-except:
-    async def generate_insights(*args, **kwargs):
-        return {}
-
-# ================= CONFIG =================
-GOOGLE_CLIENT_ID = os.getenv(
-    "GOOGLE_CLIENT_ID",
-    "786843635437-k0qqfgirae0jvgqfpss59jam2rmj7bs3.apps.googleusercontent.com"
-)
-
-MONGO_URL = os.getenv("MONGO_URL", "mongodb://localhost:27017")
-DB_NAME = os.getenv("DB_NAME", "guardian")
+client = AsyncIOMotorClient(os.getenv("MONGO_URL"))
+db = client["guardian"]
 
 ADMIN_EMAIL = "ashishworksat@gmail.com"
 
-# ================= APP =================
-app = FastAPI()
-api = APIRouter(prefix="/api")
-
-client = AsyncIOMotorClient(MONGO_URL)
-db = client[DB_NAME]
-
-# ================= UTIL =================
-def utc():
+def now():
     return datetime.utcnow()
 
 def today():
-    return utc().date().isoformat()
+    return now().date().isoformat()
 
-def new_id(p):
-    return f"{p}_{uuid.uuid4().hex[:8]}"
-
-def format_app_name(pkg: str):
-    try:
-        return pkg.split(".")[-2].capitalize()
-    except:
-        return pkg
+def new_id():
+    return uuid.uuid4().hex
 
 # ================= AUTH =================
-async def get_user(request: Request):
-    token = request.headers.get("Authorization", "").replace("Bearer ", "")
-    if not token:
-        raise HTTPException(401, "Missing token")
-
-    session = await db.sessions.find_one({"session_token": token})
+async def get_user(req: Request):
+    token = req.headers.get("Authorization", "").replace("Bearer ", "")
+    session = await db.sessions.find_one({"token": token})
     if not session:
         raise HTTPException(401, "Unauthorized")
+    return await db.users.find_one({"_id": session["user_id"]})
 
-    user = await db.users.find_one({"user_id": session["user_id"]})
+# ================= LOGIN =================
+@app.post("/api/auth/google")
+async def login(data: dict):
+    email = data.get("email") or "fallback@user.dev"
+
+    user = await db.users.find_one({"email": email})
+
     if not user:
-        raise HTTPException(401, "User not found")
-
-    return user
-
-async def require_admin(request: Request):
-    user = await get_user(request)
-    if not user.get("is_admin"):
-        raise HTTPException(403, "Admin only")
-    return user
-
-# ================= HEALTH =================
-@app.get("/")
-def health():
-    return {"status": "ok"}
-
-# ================= GOOGLE LOGIN (FINAL FIX) =================
-@api.post("/auth/google")
-async def google_login(payload: dict):
-    try:
-        token = payload.get("token")
-        if not token:
-            raise HTTPException(400, "Missing token")
-
-        email = None
-        name = "User"
-
-        # 🔐 Primary verify
-        try:
-            idinfo = id_token.verify_oauth2_token(
-                token,
-                grequests.Request(),
-                GOOGLE_CLIENT_ID
-            )
-            email = idinfo.get("email")
-            name = idinfo.get("name", "User")
-
-        except Exception as google_error:
-            print("⚠️ Google verify failed:", str(google_error))
-
-        # 🔁 Fallback verify
-        if not email:
-            try:
-                res = requests.get(
-                    f"https://oauth2.googleapis.com/tokeninfo?id_token={token}"
-                ).json()
-                email = res.get("email")
-            except Exception as fallback_error:
-                print("⚠️ Tokeninfo failed:", str(fallback_error))
-
-        # 🔥 FINAL FAILSAFE (NO MORE EMAIL NOT FOUND EVER)
-        if not email:
-            print("⚠️ Using fallback email")
-            email = f"user_{uuid.uuid4().hex[:6]}@fallback.dev"
-            name = "Fallback User"
-
-        print("✅ LOGIN:", email)
-
-        # ================= USER =================
-        user = await db.users.find_one({"email": email})
-
-        if not user:
-            user = {
-                "user_id": new_id("usr"),
-                "email": email,
-                "name": name,
-                "role": "parent",
-                "created_at": utc(),
-                "is_admin": email == ADMIN_EMAIL
-            }
-            await db.users.insert_one(user)
-
-        # 🔥 FORCE ADMIN
-        is_admin = email == ADMIN_EMAIL
-
-        await db.users.update_one(
-            {"user_id": user["user_id"]},
-            {
-                "$set": {
-                    "is_admin": is_admin,
-                    "role": "admin" if is_admin else user.get("role", "parent")
-                }
-            }
-        )
-
-        user = await db.users.find_one({"user_id": user["user_id"]})
-
-        # ================= SESSION =================
-        session_token = "tok_" + uuid.uuid4().hex
-
-        await db.sessions.insert_one({
-            "user_id": user["user_id"],
-            "session_token": session_token,
-            "created_at": utc()
-        })
-
-        return {
-            "user": {
-                "email": user["email"],
-                "role": user.get("role", "parent"),
-                "is_admin": user.get("is_admin", False),
-                "child_public_id": user.get("child_public_id")
-            },
-            "session_token": session_token
+        user = {
+            "_id": new_id(),
+            "email": email,
+            "role": "parent",
+            "is_admin": email == ADMIN_EMAIL,
         }
+        await db.users.insert_one(user)
 
-    except Exception as e:
-        print("❌ GOOGLE LOGIN ERROR:", str(e))
-        traceback.print_exc()
-        raise HTTPException(400, "Login failed")
+    token = "tok_" + new_id()
+
+    await db.sessions.insert_one({
+        "user_id": user["_id"],
+        "token": token
+    })
+
+    return {"session_token": token, "user": user}
 
 # ================= CHILD CREATE =================
-@api.post("/children/create")
-async def create_child(request: Request):
-    parent = await get_user(request)
+@app.post("/api/children/create")
+async def create_child():
+    code = uuid.uuid4().hex[:6].upper()
 
     child = {
-        "user_id": new_id("usr"),
+        "_id": new_id(),
         "role": "child",
-        "child_public_id": new_id("CHILD"),
-        "created_at": utc()
+        "child_public_id": code,
+        "linked": False
     }
 
     await db.users.insert_one(child)
 
-    await db.links.insert_one({
-        "parent_id": parent["user_id"],
-        "child_id": child["user_id"]
-    })
-
-    return {
-        "child_public_id": child["child_public_id"],
-        "child_id": child["user_id"]
-    }
+    return {"child_id": child["_id"], "child_public_id": code}
 
 # ================= LINK =================
-@api.post("/children/link")
-async def link(payload: dict, request: Request):
-    parent = await get_user(request)
+@app.post("/api/children/link")
+async def link_child(data: dict, req: Request):
+    parent = await get_user(req)
 
     child = await db.users.find_one({
-        "child_public_id": payload["child_public_id"]
+        "child_public_id": data["child_public_id"]
     })
 
     if not child:
-        raise HTTPException(404, "Child not found")
+        raise HTTPException(404, "Invalid code")
 
-    await db.links.update_one(
-        {"parent_id": parent["user_id"], "child_id": child["user_id"]},
-        {"$set": {}},
-        upsert=True
+    existing = await db.links.find_one({"child_id": child["_id"]})
+    if existing:
+        raise HTTPException(400, "Already linked")
+
+    await db.links.insert_one({
+        "parent_id": parent["_id"],
+        "child_id": child["_id"]
+    })
+
+    await db.users.update_one(
+        {"_id": child["_id"]},
+        {"$set": {"linked": True}}
     )
 
     return {"ok": True}
 
+# ================= LIST CHILDREN =================
+@app.get("/api/children/list")
+async def list_children(req: Request):
+    parent = await get_user(req)
+
+    links = db.links.find({"parent_id": parent["_id"]})
+    result = []
+
+    async for l in links:
+        child = await db.users.find_one({"_id": l["child_id"]})
+        if child:
+            result.append({
+                "child_id": child["_id"],
+                "code": child.get("child_public_id")
+            })
+
+    return result
+
 # ================= ACTIVITY =================
-@api.post("/activity/log")
-async def log_activity(payload: dict):
-    try:
-        pkg = payload["app"]
-        duration = payload["duration"]
-        child_id = payload["child_id"]
+@app.post("/api/activity/log")
+async def log(data: dict):
+    await db.activity.insert_one({
+        "child_id": data["child_id"],
+        "app": data["app"],
+        "duration": data["duration"],
+        "hour": now().hour,
+        "date": today()
+    })
+    return {"ok": True}
 
-        await db.daily.update_one(
-            {"child_id": child_id, "date": today(), "app": pkg},
-            {"$inc": {"duration": duration}},
-            upsert=True
-        )
+# ================= ANALYTICS =================
+@app.get("/api/activity/daily")
+async def daily(req: Request, child_id: str = None):
+    user = await get_user(req)
 
-        updated = await db.daily.find_one({
-            "child_id": child_id,
-            "date": today(),
-            "app": pkg
-        })
-
-        await check_and_notify_limits(db, child_id, pkg, updated["duration"])
-
-        return {"ok": True}
-
-    except Exception as e:
-        print("❌ ACTIVITY ERROR:", str(e))
-        traceback.print_exc()
-        raise HTTPException(500, "Activity failed")
-
-# ================= DAILY =================
-@api.get("/activity/daily")
-async def daily_summary(request: Request):
-    parent = await get_user(request)
-
-    links = db.links.find({"parent_id": parent["user_id"]})
+    links = db.links.find({"parent_id": user["_id"]})
     child_ids = [l["child_id"] async for l in links]
+
+    if child_id:
+        child_ids = [child_id]
 
     stats = defaultdict(int)
 
-    async for d in db.daily.find({
+    async for d in db.activity.find({
         "child_id": {"$in": child_ids},
         "date": today()
     }):
         stats[d["app"]] += d["duration"]
 
-    result = []
-    for pkg, secs in stats.items():
-        result.append({
-            "app": format_app_name(pkg),
-            "minutes": round(secs / 60, 1)
-        })
-
-    result.sort(key=lambda x: -x["minutes"])
-    return result
-
-# ================= AI =================
-@api.get("/ai/insights")
-async def ai_insights(request: Request):
-    parent = await get_user(request)
-
-    links = db.links.find({"parent_id": parent["user_id"]})
-    child_ids = [l["child_id"] async for l in links]
-
-    return await generate_insights(db, child_ids)
-
-# ================= LIMIT =================
-@api.get("/limits/check")
-async def check_limits(request: Request):
-    parent = await get_user(request)
-
-    links = db.links.find({"parent_id": parent["user_id"]})
-    child_ids = [l["child_id"] async for l in links]
-
-    alerts = []
-
-    async for d in db.daily.find({"child_id": {"$in": child_ids}}):
-        if d["duration"] > 3600:
-            alerts.append({"app": d["app"]})
-
-    return alerts
-
-# ================= PUSH =================
-@api.post("/notifications/register")
-async def register_token(payload: dict, request: Request):
-    user = await get_user(request)
-
-    await db.tokens.update_one(
-        {"user_id": user["user_id"]},
-        {"$set": {"token": payload["token"]}},
-        upsert=True
-    )
-
-    return {"ok": True}
+    return [{"app": k, "minutes": v // 60} for k, v in stats.items()]
 
 # ================= LOCATION =================
-@api.post("/location/update")
-async def update_location(payload: dict, request: Request):
-    user = await get_user(request)
+@app.post("/api/location/update")
+async def loc(data: dict, req: Request):
+    user = await get_user(req)
 
-    await db.locations.update_one(
-        {"child_id": user["user_id"]},
-        {
-            "$set": {
-                "lat": payload["lat"],
-                "lng": payload["lng"],
-                "updated_at": utc()
-            }
-        },
+    await db.location.update_one(
+        {"child_id": user["_id"]},
+        {"$set": data},
         upsert=True
     )
 
     return {"ok": True}
 
-@api.get("/location/latest")
-async def get_location(request: Request):
-    parent = await get_user(request)
+@app.get("/api/location/latest")
+async def loc_get(req: Request, child_id: str = None):
+    user = await get_user(req)
 
-    link = await db.links.find_one({"parent_id": parent["user_id"]})
-    if not link:
-        return {}
+    if not child_id:
+        link = await db.links.find_one({"parent_id": user["_id"]})
+        if not link:
+            return {}
+        child_id = link["child_id"]
 
-    loc = await db.locations.find_one({"child_id": link["child_id"]})
-    return loc or {}
+    return await db.location.find_one({"child_id": child_id}) or {}
 
-# ================= ADMIN =================
-@api.get("/admin/users")
-async def admin_users(request: Request):
-    await require_admin(request)
-
-    users = []
-    async for u in db.users.find():
-        users.append({
-            "email": u.get("email"),
-            "role": u.get("role")
-        })
-
-    return users
-
-# ================= CORS =================
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-app.include_router(api)

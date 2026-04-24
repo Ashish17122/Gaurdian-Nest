@@ -2,9 +2,7 @@ import { useEffect, useState } from "react";
 import {
   View,
   Text,
-  Button,
-  Alert,
-  Linking,
+  StyleSheet,
   ActivityIndicator,
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -24,108 +22,156 @@ export default function Child() {
 
   const init = async () => {
     try {
-      let savedCode = await AsyncStorage.getItem("child_code");
-      let savedId = await AsyncStorage.getItem("child_id");
+      let c = await AsyncStorage.getItem("child_code");
+      let id = await AsyncStorage.getItem("child_id");
 
-      // 🔥 create child if not exists
-      if (!savedCode || !savedId) {
+      // 🔥 CREATE CHILD IF NOT EXISTS
+      if (!c || !id) {
         const res = await api("/children/create", {
           method: "POST",
         });
 
-        savedCode = res.child_public_id;
-        savedId = res.child_id;
+        c = res.child_public_id;
+        id = res.child_id;
 
-        if (savedCode) {
-          await AsyncStorage.setItem("child_code", savedCode);
-        }
-        if (savedId) {
-          await AsyncStorage.setItem("child_id", savedId);
-        }
+        // ✅ FIXED (no null passed)
+        if (c) await AsyncStorage.setItem("child_code", c);
+        if (id) await AsyncStorage.setItem("child_id", id);
       }
 
-      setCode(savedCode || "");
-      setChildId(savedId || "");
-    } catch (e: any) {
-      Alert.alert("Error", e.message || "Init failed");
+      // ✅ SAFE STATE SET
+      setCode(c || "");
+      setChildId(id || "");
+
+      // 🚀 START REAL TRACKING SERVICE
+      UsageModule?.startService?.();
+
+    } catch (e) {
+      console.log("Child init error:", e);
     } finally {
       setLoading(false);
     }
   };
 
-  const openUsageSettings = () => {
-    Linking.openSettings();
-    Alert.alert(
-      "Enable Permissions",
-      "Enable:\n• Usage Access\n• Location Permission"
-    );
-  };
-
-  const startUsage = () => {
-    try {
-      UsageModule?.startService?.();
-      Alert.alert("Usage tracking started");
-    } catch {
-      Alert.alert("Error starting usage tracking");
-    }
-  };
-
-  const startLocation = () => {
-    try {
-      UsageModule?.startLocation?.();
-      Alert.alert("Location tracking started");
-    } catch {
-      Alert.alert("Error starting location tracking");
-    }
-  };
-
-  // 🔥 send test data (simulate real tracking)
-  const sendTestData = async () => {
-    try {
-      await api("/activity/log", {
-        method: "POST",
-        body: JSON.stringify({
-          app: "youtube",
-          duration: 180,
-          child_id: childId,
-        }),
-      });
-
-      await api("/location/update", {
-        method: "POST",
-        body: JSON.stringify({
-          lat: 28.61,
-          lng: 77.23,
-        }),
-      });
-
-      Alert.alert("Data sent to parent");
-    } catch (e: any) {
-      Alert.alert("Error", e.message);
-    }
-  };
-
+  // 🔥 LOADING UI
   if (loading) {
     return (
-      <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
-        <ActivityIndicator />
+      <View style={styles.loader}>
+        <ActivityIndicator size="large" color="#00C9A7" />
+        <Text style={styles.loadingText}>Setting up device...</Text>
       </View>
     );
   }
 
   return (
-    <View style={{ flex: 1, justifyContent: "center", alignItems: "center", gap: 20 }}>
-      <Text style={{ fontSize: 24, fontWeight: "bold" }}>Child Mode</Text>
+    <View style={styles.container}>
+      {/* HEADER */}
+      <Text style={styles.title}>Child Device</Text>
 
-      <Text style={{ fontSize: 28, color: "#00C9A7" }}>{code}</Text>
-      <Text>Give this code to parent</Text>
+      {/* CODE BOX */}
+      <View style={styles.codeBox}>
+        <Text style={styles.code}>{code}</Text>
+      </View>
 
-      <Button title="Enable Permissions" onPress={openUsageSettings} />
-      <Button title="Start Usage Tracking" onPress={startUsage} />
-      <Button title="Start Location Tracking" onPress={startLocation} />
+      {/* INFO */}
+      <Text style={styles.desc}>
+        Enter this code on the parent device to connect
+      </Text>
 
-      {/* DEBUG / TEST */}
-      <Button title="Send Test Data" onPress={sendTestData} color="orange" />
+      {/* STATUS CARD */}
+      <View style={styles.status}>
+        <Text style={styles.statusText}>✔ Tracking Active</Text>
+        <Text style={styles.sub}>
+          App usage & device activity are being monitored
+        </Text>
+      </View>
+
+      {/* DEBUG INFO (optional but useful for production debugging) */}
+      <View style={styles.meta}>
+        <Text style={styles.metaText}>Device ID: {childId}</Text>
+      </View>
     </View>
   );
 }
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: "#0B1F2A",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 20,
+  },
+
+  title: {
+    fontSize: 26,
+    color: "#fff",
+    fontWeight: "bold",
+    marginBottom: 20,
+  },
+
+  codeBox: {
+    backgroundColor: "#132F3D",
+    paddingVertical: 20,
+    paddingHorizontal: 40,
+    borderRadius: 16,
+    marginBottom: 20,
+    elevation: 4,
+  },
+
+  code: {
+    fontSize: 36,
+    color: "#00C9A7",
+    fontWeight: "bold",
+    letterSpacing: 3,
+  },
+
+  desc: {
+    color: "#aaa",
+    textAlign: "center",
+    marginBottom: 30,
+    fontSize: 14,
+  },
+
+  status: {
+    backgroundColor: "#132F3D",
+    padding: 18,
+    borderRadius: 12,
+    width: "100%",
+    alignItems: "center",
+  },
+
+  statusText: {
+    color: "#00C9A7",
+    fontWeight: "bold",
+    fontSize: 16,
+  },
+
+  sub: {
+    color: "#aaa",
+    fontSize: 12,
+    marginTop: 6,
+    textAlign: "center",
+  },
+
+  meta: {
+    marginTop: 20,
+  },
+
+  metaText: {
+    color: "#555",
+    fontSize: 10,
+  },
+
+  loader: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "#0B1F2A",
+  },
+
+  loadingText: {
+    marginTop: 10,
+    color: "#aaa",
+  },
+});
