@@ -34,16 +34,23 @@ export default function Child() {
         c = res.child_public_id;
         id = res.child_id;
 
-        // ✅ FIXED (no null passed)
         if (c) await AsyncStorage.setItem("child_code", c);
         if (id) await AsyncStorage.setItem("child_id", id);
       }
 
-      // ✅ SAFE STATE SET
-      setCode(c || "");
-      setChildId(id || "");
+      // ✅ SAFE STATE
+      const safeCode = c || "";
+      const safeId = id || "";
 
-      // 🚀 START REAL TRACKING SERVICE
+      setCode(safeCode);
+      setChildId(safeId);
+
+      // 🔥 CRITICAL: SEND CHILD ID TO ANDROID SERVICE
+      if (safeId) {
+        UsageModule?.setChildId?.(safeId);
+      }
+
+      // 🚀 START TRACKING
       UsageModule?.startService?.();
 
     } catch (e) {
@@ -65,20 +72,16 @@ export default function Child() {
 
   return (
     <View style={styles.container}>
-      {/* HEADER */}
       <Text style={styles.title}>Child Device</Text>
 
-      {/* CODE BOX */}
       <View style={styles.codeBox}>
         <Text style={styles.code}>{code}</Text>
       </View>
 
-      {/* INFO */}
       <Text style={styles.desc}>
         Enter this code on the parent device to connect
       </Text>
 
-      {/* STATUS CARD */}
       <View style={styles.status}>
         <Text style={styles.statusText}>✔ Tracking Active</Text>
         <Text style={styles.sub}>
@@ -86,7 +89,6 @@ export default function Child() {
         </Text>
       </View>
 
-      {/* DEBUG INFO (optional but useful for production debugging) */}
       <View style={styles.meta}>
         <Text style={styles.metaText}>Device ID: {childId}</Text>
       </View>
