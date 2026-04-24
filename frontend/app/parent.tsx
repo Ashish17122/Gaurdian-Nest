@@ -9,6 +9,7 @@ import {
   TextInput,
   Alert,
   Dimensions,
+  StatusBar,
 } from "react-native";
 import { BarChart } from "react-native-chart-kit";
 import { api } from "../src/api";
@@ -18,6 +19,7 @@ const width = Dimensions.get("window").width;
 export default function Parent() {
   const [children, setChildren] = useState<any[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
+  const [selectedChild, setSelectedChild] = useState<any>(null);
   const [apps, setApps] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [code, setCode] = useState("");
@@ -36,7 +38,11 @@ export default function Parent() {
 
       if (!res?.error) {
         setChildren(res || []);
-        if (res.length > 0) setSelected(res[0].child_id);
+
+        if (res.length > 0) {
+          setSelected(res[0].child_id);
+          setSelectedChild(res[0]);
+        }
       }
     } catch (e) {
       console.log(e);
@@ -48,7 +54,17 @@ export default function Parent() {
   const loadData = async () => {
     try {
       const res = await api(`/activity/daily?child_id=${selected}`);
-      if (!res?.error) setApps(res || []);
+
+      if (!res?.error) {
+        const sorted = (res || []).sort(
+          (a: any, b: any) => (b.minutes || 0) - (a.minutes || 0)
+        );
+        setApps(sorted);
+      }
+
+      const child = children.find((c) => c.child_id === selected);
+      setSelectedChild(child);
+
     } catch (e) {
       console.log(e);
     }
@@ -71,11 +87,13 @@ export default function Parent() {
     }
   };
 
-  // 🔥 CALCULATED ANALYTICS
+  // 🔥 ANALYTICS
   const totalMinutes = apps.reduce((sum, a) => sum + (a.minutes || 0), 0);
 
   const chartData = {
-    labels: apps.slice(0, 5).map((a) => a.app?.slice(0, 6)),
+    labels: apps.slice(0, 5).map((a) =>
+      a.app?.split(".").pop()?.slice(0, 5) || "App"
+    ),
     datasets: [
       {
         data: apps.slice(0, 5).map((a) => a.minutes || 0),
@@ -121,11 +139,11 @@ export default function Parent() {
         </View>
       )}
 
-      {/* ✅ CHILD DASHBOARD */}
+      {/* ✅ DASHBOARD */}
       {children.length > 0 && (
         <>
-          {/* CHILD SWITCH */}
-          <ScrollView horizontal style={styles.row}>
+          {/* CHILD TABS */}
+          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
             {children.map((c) => (
               <TouchableOpacity
                 key={c.child_id}
@@ -135,12 +153,26 @@ export default function Parent() {
                   selected === c.child_id && styles.active,
                 ]}
               >
-                <Text style={styles.childText}>{c.code}</Text>
+                <Text style={styles.childText}>
+                  {c.name || "Child"}
+                </Text>
               </TouchableOpacity>
             ))}
           </ScrollView>
 
-          {/* 🔥 TOTAL USAGE */}
+          {/* CHILD INFO */}
+          {selectedChild && (
+            <View style={styles.infoCard}>
+              <Text style={styles.childName}>
+                {selectedChild.name || "Child"}
+              </Text>
+              <Text style={styles.childId}>
+                Device ID: {selectedChild.child_id}
+              </Text>
+            </View>
+          )}
+
+          {/* TOTAL */}
           <View style={styles.statCard}>
             <Text style={styles.statLabel}>Total Screen Time</Text>
             <Text style={styles.statValue}>
@@ -148,7 +180,7 @@ export default function Parent() {
             </Text>
           </View>
 
-          {/* 📊 CHART */}
+          {/* CHART */}
           <View style={styles.card}>
             <Text style={styles.title}>Top Apps</Text>
 
@@ -175,14 +207,18 @@ export default function Parent() {
             )}
           </View>
 
-          {/* 📱 APP LIST */}
+          {/* LIST */}
           <View style={styles.card}>
             <Text style={styles.title}>App Usage</Text>
 
             {apps.map((a, i) => (
               <View key={i} style={styles.appRow}>
-                <Text style={styles.appName}>{a.app}</Text>
-                <Text style={styles.appTime}>{a.minutes} min</Text>
+                <Text style={styles.appName}>
+                  {a.app?.split(".").pop()}
+                </Text>
+                <Text style={styles.appTime}>
+                  {a.minutes} min
+                </Text>
               </View>
             ))}
           </View>
@@ -196,11 +232,12 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#0B1F2A",
-    padding: 20,
+    paddingTop: StatusBar.currentHeight || 40,
+    padding: 16,
   },
 
   header: {
-    fontSize: 30,
+    fontSize: 28,
     color: "#fff",
     fontWeight: "bold",
     marginBottom: 20,
@@ -225,6 +262,24 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
 
+  infoCard: {
+    backgroundColor: "#132F3D",
+    padding: 16,
+    borderRadius: 14,
+    marginBottom: 16,
+  },
+
+  childName: {
+    color: "#fff",
+    fontSize: 18,
+    fontWeight: "bold",
+  },
+
+  childId: {
+    color: "#aaa",
+    fontSize: 12,
+  },
+
   statCard: {
     backgroundColor: "#00C9A7",
     padding: 20,
@@ -234,19 +289,17 @@ const styles = StyleSheet.create({
 
   statLabel: {
     color: "#000",
-    fontSize: 14,
   },
 
   statValue: {
     color: "#000",
-    fontSize: 32,
+    fontSize: 30,
     fontWeight: "bold",
   },
 
   title: {
     color: "#fff",
     marginBottom: 10,
-    fontSize: 16,
     fontWeight: "600",
   },
 
@@ -278,16 +331,11 @@ const styles = StyleSheet.create({
   emptyTitle: {
     color: "#fff",
     fontSize: 18,
-    marginBottom: 6,
   },
 
   emptySub: {
     color: "#aaa",
     textAlign: "center",
-  },
-
-  row: {
-    marginBottom: 16,
   },
 
   child: {

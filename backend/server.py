@@ -21,6 +21,7 @@ def today():
 def new_id():
     return uuid.uuid4().hex
 
+
 # ================= AUTH =================
 async def get_user(req: Request):
     token = req.headers.get("Authorization", "").replace("Bearer ", "")
@@ -28,6 +29,25 @@ async def get_user(req: Request):
     if not session:
         raise HTTPException(401, "Unauthorized")
     return await db.users.find_one({"_id": session["user_id"]})
+
+
+# ================= USER REGISTER (🔥 NEW) =================
+@app.post("/api/user/register")
+async def register_user(data: dict, req: Request):
+    name = data.get("name")
+
+    if not name:
+        raise HTTPException(400, "Name required")
+
+    user = await get_user(req)
+
+    await db.users.update_one(
+        {"_id": user["_id"]},
+        {"$set": {"name": name}}
+    )
+
+    return {"ok": True}
+
 
 # ================= LOGIN =================
 @app.post("/api/auth/google")
@@ -42,6 +62,7 @@ async def login(data: dict):
             "email": email,
             "role": "parent",
             "is_admin": email == ADMIN_EMAIL,
+            "name": None
         }
         await db.users.insert_one(user)
 
@@ -54,21 +75,30 @@ async def login(data: dict):
 
     return {"session_token": token, "user": user}
 
+
 # ================= CHILD CREATE =================
 @app.post("/api/children/create")
-async def create_child():
+async def create_child(data: dict = {}):
     code = uuid.uuid4().hex[:6].upper()
+    name = data.get("name", "Child Device")
 
     child = {
         "_id": new_id(),
         "role": "child",
+        "name": name,
         "child_public_id": code,
-        "linked": False
+        "linked": False,
+        "created_at": now()
     }
 
     await db.users.insert_one(child)
 
-    return {"child_id": child["_id"], "child_public_id": code}
+    return {
+        "child_id": child["_id"],
+        "child_public_id": code,
+        "name": name
+    }
+
 
 # ================= LINK =================
 @app.post("/api/children/link")
@@ -88,7 +118,8 @@ async def link_child(data: dict, req: Request):
 
     await db.links.insert_one({
         "parent_id": parent["_id"],
-        "child_id": child["_id"]
+        "child_id": child["_id"],
+        "linked_at": now()
     })
 
     await db.users.update_one(
@@ -96,7 +127,12 @@ async def link_child(data: dict, req: Request):
         {"$set": {"linked": True}}
     )
 
-    return {"ok": True}
+    return {
+        "ok": True,
+        "child_name": child.get("name"),
+        "child_id": child["_id"]
+    }
+
 
 # ================= LIST CHILDREN =================
 @app.get("/api/children/list")
@@ -111,10 +147,13 @@ async def list_children(req: Request):
         if child:
             result.append({
                 "child_id": child["_id"],
-                "code": child.get("child_public_id")
+                "code": child.get("child_public_id"),
+                "name": child.get("name", "Unknown"),
+                "linked": child.get("linked", False)
             })
 
     return result
+
 
 # ================= ACTIVITY =================
 @app.post("/api/activity/log")
@@ -128,6 +167,7 @@ async def log(data: dict):
     })
     return {"ok": True}
 
+
 # ================= ANALYTICS =================
 @app.get("/api/activity/daily")
 async def daily(req: Request, child_id: str = None):
@@ -140,14 +180,26 @@ async def daily(req: Request, child_id: str = None):
         child_ids = [child_id]
 
     stats = defaultdict(int)
+    hours = defaultdict(int)
 
     async for d in db.activity.find({
         "child_id": {"$in": child_ids},
         "date": today()
     }):
         stats[d["app"]] += d["duration"]
+        hours[d["hour"]] += d["duration"]
 
-    return [{"app": k, "minutes": v // 60} for k, v in stats.items()]
+    # 🔥 insights
+    top_app = max(stats, key=stats.get) if stats else None
+    peak_hour = max(hours, key=hours.get) if hours else None
+
+    return {
+        "apps": [{"app": k, "minutes": v // 60} for k, v in stats.items()],
+        "top_app": top_app,
+        "peak_hour": peak_hour,
+        "total_minutes": sum(stats.values()) // 60
+    }
+
 
 # ================= LOCATION =================
 @app.post("/api/location/update")
@@ -162,6 +214,7 @@ async def loc(data: dict, req: Request):
 
     return {"ok": True}
 
+
 @app.get("/api/location/latest")
 async def loc_get(req: Request, child_id: str = None):
     user = await get_user(req)
@@ -174,10 +227,11 @@ async def loc_get(req: Request, child_id: str = None):
 
     return await db.location.find_one({"child_id": child_id}) or {}
 
+
+# ================= CORS =================
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
-#=====ashish======

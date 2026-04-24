@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { View, ActivityIndicator } from "react-native";
+import { View, ActivityIndicator, StatusBar, StyleSheet } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { router } from "expo-router";
 
@@ -9,28 +9,51 @@ export default function Index() {
   }, []);
 
   const init = async () => {
-    const token = await AsyncStorage.getItem("gn_token");
-    const role = await AsyncStorage.getItem("gn_role");
+    try {
+      const token = await AsyncStorage.getItem("gn_token");
+      const role = await AsyncStorage.getItem("gn_role");
+      const name = await AsyncStorage.getItem("user_name");
 
-    // 🔥 NO TOKEN → go role select
-    if (!token) {
+      // 🔥 STEP 1: ensure name exists
+      if (!name) {
+        router.replace("/register" as any);
+        return;
+      }
+
+      // 🔥 STEP 2: not logged in
+      if (!token) {
+        router.replace("/role");
+        return;
+      }
+
+      // 🔥 STEP 3: route based on role
+      if (role === "child") {
+        router.replace("/child");
+      } else if (role === "admin") {
+        router.replace("/admin");
+      } else {
+        router.replace("/parent");
+      }
+
+    } catch (e) {
+      console.log("Init error:", e);
       router.replace("/role");
-      return;
-    }
-
-    // 🔥 FORCE ROUTING BY ROLE
-    if (role === "child") {
-      router.replace("/child");
-    } else if (role === "admin") {
-      router.replace("/admin");
-    } else {
-      router.replace("/parent");
     }
   };
 
   return (
-    <View style={{ flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: "#0B1F2A" }}>
+    <View style={styles.container}>
+      <StatusBar barStyle="light-content" />
       <ActivityIndicator color="#00C9A7" size="large" />
     </View>
   );
 }
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: "#0B1F2A",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+});

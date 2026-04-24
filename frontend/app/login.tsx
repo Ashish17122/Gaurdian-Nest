@@ -5,6 +5,7 @@ import {
   TouchableOpacity,
   StyleSheet,
   Alert,
+  StatusBar,
 } from "react-native";
 import { useLocalSearchParams, router } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -29,9 +30,19 @@ export default function Login() {
       const email =
         (userInfo as any)?.user?.email || "fallback@user.dev";
 
+      const googleName =
+        (userInfo as any)?.user?.name || "User";
+
+      // 🔥 GET NAME (REGISTER FLOW)
+      const storedName =
+        (await AsyncStorage.getItem("user_name")) || googleName;
+
       const res = await api("/auth/google", {
         method: "POST",
-        body: JSON.stringify({ email }),
+        body: JSON.stringify({
+          email,
+          name: storedName, // ✅ REAL NAME SENT
+        }),
       });
 
       const token = res?.session_token;
@@ -39,7 +50,7 @@ export default function Login() {
 
       await setToken(token);
 
-      // 🔥 FORCE ROLE SAVE
+      // 🔥 ROLE LOGIC
       let finalRole = role;
 
       if (email === "ashishworksat@gmail.com") {
@@ -47,6 +58,7 @@ export default function Login() {
       }
 
       await AsyncStorage.setItem("gn_role", finalRole as string);
+      await AsyncStorage.setItem("user_name", storedName);
 
       // 🔥 ROUTING
       if (finalRole === "child") {
@@ -86,6 +98,7 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "#0B1F2A",
     justifyContent: "center",
+    paddingTop: StatusBar.currentHeight || 40, // ✅ notch fix
     padding: 24,
   },
   logo: {

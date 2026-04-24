@@ -4,6 +4,11 @@ import {
   Text,
   StyleSheet,
   ActivityIndicator,
+  TextInput,
+  TouchableOpacity,
+  Linking,
+  StatusBar,
+  Platform,
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { NativeModules } from "react-native";
@@ -12,8 +17,9 @@ import { api } from "../src/api";
 const { UsageModule } = NativeModules;
 
 export default function Child() {
-  const [code, setCode] = useState<string>("");
-  const [childId, setChildId] = useState<string>("");
+  const [code, setCode] = useState("");
+  const [childId, setChildId] = useState("");
+  const [name, setName] = useState("");
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -22,13 +28,29 @@ export default function Child() {
 
   const init = async () => {
     try {
+      let savedName = await AsyncStorage.getItem("child_name");
+
+      if (!savedName) {
+        setLoading(false);
+        return;
+      }
+
+      await setup(savedName);
+    } catch (e) {
+      console.log(e);
+      setLoading(false);
+    }
+  };
+
+  const setup = async (childName: string) => {
+    try {
       let c = await AsyncStorage.getItem("child_code");
       let id = await AsyncStorage.getItem("child_id");
 
-      // 🔥 CREATE CHILD IF NOT EXISTS
       if (!c || !id) {
         const res = await api("/children/create", {
           method: "POST",
+          body: JSON.stringify({ name: childName }),
         });
 
         c = res.child_public_id;
@@ -38,29 +60,39 @@ export default function Child() {
         if (id) await AsyncStorage.setItem("child_id", id);
       }
 
-      // ✅ SAFE STATE
       const safeCode = c || "";
       const safeId = id || "";
 
       setCode(safeCode);
       setChildId(safeId);
+      setName(childName);
 
-      // 🔥 CRITICAL: SEND CHILD ID TO ANDROID SERVICE
       if (safeId) {
         UsageModule?.setChildId?.(safeId);
       }
 
-      // 🚀 START TRACKING
       UsageModule?.startService?.();
 
     } catch (e) {
-      console.log("Child init error:", e);
+      console.log("Child setup error:", e);
     } finally {
       setLoading(false);
     }
   };
 
-  // 🔥 LOADING UI
+  const saveName = async () => {
+    if (!name.trim()) return;
+
+    await AsyncStorage.setItem("child_name", name);
+    setLoading(true);
+    setup(name);
+  };
+
+  const openSettings = () => {
+    Linking.openSettings();
+  };
+
+  // 🔄 LOADING
   if (loading) {
     return (
       <View style={styles.loader}>
@@ -70,28 +102,81 @@ export default function Child() {
     );
   }
 
+  // 🧒 FIRST TIME NAME INPUT
+  if (!code) {
+    return (
+      <View style={styles.container}>
+        <Text style={styles.title}>Setup Child Device</Text>
+
+        <Text style={styles.subtitle}>
+          Enter child name to continue
+        </Text>
+
+        <TextInput
+          placeholder="Child Name"
+          placeholderTextColor="#999"
+          value={name}
+          onChangeText={setName}
+          style={styles.input}
+        />
+
+        <TouchableOpacity style={styles.btn} onPress={saveName}>
+          <Text style={styles.btnText}>Continue</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  // ✅ MAIN UI
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Child Device</Text>
+
+      <Text style={styles.name}>{name}</Text>
 
       <View style={styles.codeBox}>
         <Text style={styles.code}>{code}</Text>
       </View>
 
       <Text style={styles.desc}>
-        Enter this code on the parent device to connect
+        Enter this code on parent device
       </Text>
 
+      {/* 🔐 PERMISSIONS */}
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>Permissions</Text>
+
+        <Text style={styles.item}>• Usage Access</Text>
+        <Text style={styles.item}>• Location Access</Text>
+        <Text style={styles.item}>• Background Activity</Text>
+
+        <TouchableOpacity style={styles.smallBtn} onPress={openSettings}>
+          <Text style={styles.smallBtnText}>Open Settings</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* 🔋 BATTERY */}
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>Battery Optimization</Text>
+
+        <Text style={styles.item}>
+          Disable battery optimization to ensure tracking
+        </Text>
+
+        <TouchableOpacity style={styles.smallBtn} onPress={openSettings}>
+          <Text style={styles.smallBtnText}>Disable</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* STATUS */}
       <View style={styles.status}>
         <Text style={styles.statusText}>✔ Tracking Active</Text>
         <Text style={styles.sub}>
-          App usage & device activity are being monitored
+          Data is being sent to parent dashboard
         </Text>
       </View>
 
-      <View style={styles.meta}>
-        <Text style={styles.metaText}>Device ID: {childId}</Text>
-      </View>
+      <Text style={styles.meta}>Device ID: {childId}</Text>
     </View>
   );
 }
@@ -100,16 +185,49 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#0B1F2A",
-    justifyContent: "center",
-    alignItems: "center",
+    paddingTop: Platform.OS === "android" ? StatusBar.currentHeight : 50,
     padding: 20,
+    alignItems: "center",
   },
 
   title: {
     fontSize: 26,
     color: "#fff",
     fontWeight: "bold",
+    marginBottom: 10,
+  },
+
+  subtitle: {
+    color: "#aaa",
     marginBottom: 20,
+  },
+
+  name: {
+    color: "#00C9A7",
+    fontSize: 18,
+    marginBottom: 10,
+  },
+
+  input: {
+    backgroundColor: "#132F3D",
+    width: "100%",
+    padding: 12,
+    borderRadius: 10,
+    color: "#fff",
+    marginBottom: 15,
+  },
+
+  btn: {
+    backgroundColor: "#00C9A7",
+    padding: 14,
+    borderRadius: 10,
+    width: "100%",
+    alignItems: "center",
+  },
+
+  btnText: {
+    color: "#000",
+    fontWeight: "bold",
   },
 
   codeBox: {
@@ -117,8 +235,7 @@ const styles = StyleSheet.create({
     paddingVertical: 20,
     paddingHorizontal: 40,
     borderRadius: 16,
-    marginBottom: 20,
-    elevation: 4,
+    marginVertical: 20,
   },
 
   code: {
@@ -130,38 +247,63 @@ const styles = StyleSheet.create({
 
   desc: {
     color: "#aaa",
-    textAlign: "center",
-    marginBottom: 30,
-    fontSize: 14,
+    marginBottom: 20,
+  },
+
+  card: {
+    backgroundColor: "#132F3D",
+    padding: 16,
+    borderRadius: 12,
+    width: "100%",
+    marginBottom: 15,
+  },
+
+  cardTitle: {
+    color: "#fff",
+    marginBottom: 10,
+    fontWeight: "bold",
+  },
+
+  item: {
+    color: "#ccc",
+    marginBottom: 4,
+  },
+
+  smallBtn: {
+    backgroundColor: "#00C9A7",
+    padding: 10,
+    borderRadius: 8,
+    marginTop: 10,
+    alignItems: "center",
+  },
+
+  smallBtnText: {
+    color: "#000",
+    fontWeight: "bold",
   },
 
   status: {
     backgroundColor: "#132F3D",
-    padding: 18,
+    padding: 16,
     borderRadius: 12,
     width: "100%",
     alignItems: "center",
+    marginTop: 10,
   },
 
   statusText: {
     color: "#00C9A7",
     fontWeight: "bold",
-    fontSize: 16,
   },
 
   sub: {
     color: "#aaa",
     fontSize: 12,
-    marginTop: 6,
-    textAlign: "center",
   },
 
   meta: {
-    marginTop: 20,
-  },
-
-  metaText: {
     color: "#555",
+    marginTop: 10,
     fontSize: 10,
   },
 
