@@ -21,7 +21,10 @@ class UsageService : Service() {
 
     private val handler = Handler(Looper.getMainLooper())
 
-    private var isRunning = false // 🔥 prevents duplicate loops
+    private var isRunning = false
+
+    private var lastApp: String = ""
+    private var lastStartTime: Long = 0
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
@@ -31,27 +34,24 @@ class UsageService : Service() {
     private val runnable = object : Runnable {
         override fun run() {
             try {
-                sendUsage()
+                trackUsage()
             } catch (e: Exception) {
                 Log.e("UsageService", "Loop error: ${e.message}")
             }
 
             if (isRunning) {
-                handler.postDelayed(this, 10000) // every 10s
+                handler.postDelayed(this, 5000) // 🔥 faster detection
             }
         }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-
         if (!isRunning) {
             Log.d("UsageService", "Service started")
             isRunning = true
+            lastStartTime = System.currentTimeMillis()
             handler.post(runnable)
-        } else {
-            Log.d("UsageService", "Service already running")
         }
-
         return START_STICKY
     }
 
@@ -64,13 +64,13 @@ class UsageService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    // 🔥 IMPROVED foreground app detection
+    // 🔥 REAL FOREGROUND APP
     private fun getForegroundApp(): String {
         val usageStatsManager =
             getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
 
         val end = System.currentTimeMillis()
-        val start = end - 15000 // slightly larger window (more stable)
+        val start = end - 10000
 
         val stats = usageStatsManager.queryUsageStats(
             UsageStatsManager.INTERVAL_DAILY,
@@ -84,24 +84,46 @@ class UsageService : Service() {
         return recent?.packageName ?: "unknown"
     }
 
-    // 🚀 SEND DATA TO BACKEND
-    private fun sendUsage() {
-        val app = getForegroundApp()
-        val childId = getChildId()
+    // 🚀 CORE LOGIC (SESSION TRACKING)
+    private fun trackUsage() {
+        val currentApp = getForegroundApp()
+        val now = System.currentTimeMillis()
 
-        if (childId.isEmpty()) {
-            Log.e("UsageService", "No child_id found, skipping")
+        if (currentApp == "unknown") return
+
+        // 🔥 FIRST RUN
+        if (lastApp.isEmpty()) {
+            lastApp = currentApp
+            lastStartTime = now
             return
         }
 
-        if (app == "unknown") {
-            Log.d("UsageService", "Unknown app, skipping")
+        // 🔥 APP SWITCH DETECTED
+        if (currentApp != lastApp) {
+
+            val duration = ((now - lastStartTime) / 1000).toInt()
+
+            if (duration > 1) {
+                sendUsage(lastApp, duration)
+            }
+
+            lastApp = currentApp
+            lastStartTime = now
+        }
+    }
+
+    // 🚀 SEND REAL DATA
+    private fun sendUsage(app: String, duration: Int) {
+        val childId = getChildId()
+
+        if (childId.isEmpty()) {
+            Log.e("UsageService", "No child_id found")
             return
         }
 
         val json = JSONObject().apply {
             put("app", app)
-            put("duration", 10)
+            put("duration", duration)
             put("child_id", childId)
         }
 
@@ -121,7 +143,7 @@ class UsageService : Service() {
 
             override fun onResponse(call: Call, response: Response) {
                 if (response.isSuccessful) {
-                    Log.d("UsageService", "Usage sent: $app")
+                    Log.d("UsageService", "Sent: $app ($duration sec)")
                 } else {
                     Log.e("UsageService", "Server error: ${response.code}")
                 }
@@ -130,7 +152,6 @@ class UsageService : Service() {
         })
     }
 
-    // 🔐 GET CHILD ID FROM STORAGE
     private fun getChildId(): String {
         val prefs = getSharedPreferences("GN", Context.MODE_PRIVATE)
         return prefs.getString("child_id", "") ?: ""
