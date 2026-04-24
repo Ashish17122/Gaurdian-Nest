@@ -1,12 +1,17 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="app.guardiannest">
 
-    <!-- 🔐 PERMISSIONS -->
+    <!-- 🌐 CORE PERMISSIONS -->
     <uses-permission android:name="android.permission.INTERNET"/>
-    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS"/>
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
 
+    <!-- 📊 USAGE TRACKING -->
+    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS"/>
+
+    <!-- 🔥 FOREGROUND SERVICE -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+
+    <!-- 📍 LOCATION -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION"/>
@@ -18,12 +23,12 @@
         android:allowBackup="true"
         android:theme="@style/AppTheme">
 
-        <!-- ✅ GOOGLE MAPS API KEY -->
+        <!-- ✅ GOOGLE MAPS -->
         <meta-data
             android:name="com.google.android.geo.API_KEY"
             android:value="AIzaSyCqzC-JMxE4UAYE2fEvzHHNfoPqi9sg3Q0" />
 
-        <!-- ✅ MAIN ACTIVITY -->
+        <!-- 🚀 MAIN ACTIVITY -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -38,17 +43,31 @@
 
         </activity>
 
-        <!-- ✅ USAGE SERVICE -->
+        <!-- 🔥 FOREGROUND USAGE SERVICE -->
         <service
             android:name=".UsageService"
             android:enabled="true"
-            android:exported="false"/>
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
-        <!-- ✅ LOCATION SERVICE -->
+        <!-- 📍 LOCATION SERVICE -->
         <service
             android:name=".LocationService"
             android:enabled="true"
-            android:exported="false"/>
+            android:exported="false"
+            android:foregroundServiceType="location" />
+
+        <!-- 🔁 AUTO START AFTER REBOOT -->
+        <receiver
+            android:name=".BootReceiver"
+            android:enabled="true"
+            android:exported="true">
+
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED"/>
+            </intent-filter>
+
+        </receiver>
 
     </application>
 

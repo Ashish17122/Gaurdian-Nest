@@ -1,7 +1,7 @@
 package app.guardiannest
 
-import android.content.Context
 import android.content.Intent
+import android.content.Context
 import com.facebook.react.bridge.*
 
 class UsageModule(private val reactContext: ReactApplicationContext) :
@@ -9,21 +9,18 @@ class UsageModule(private val reactContext: ReactApplicationContext) :
 
     override fun getName(): String = "UsageModule"
 
-    // 🔥 SAVE CHILD ID (CRITICAL)
-    @ReactMethod
-    fun setChildId(childId: String) {
-        val prefs = reactContext.getSharedPreferences("GN", Context.MODE_PRIVATE)
-        prefs.edit().putString("child_id", childId).apply()
-    }
-
-    // 🚀 START USAGE TRACKING SERVICE
     @ReactMethod
     fun startService() {
         val intent = Intent(reactContext, UsageService::class.java)
-        reactContext.startService(intent)
+        reactContext.startForegroundService(intent)
     }
 
-    // 📍 START LOCATION SERVICE (keep your feature)
+    @ReactMethod
+    fun setChildId(id: String) {
+        val prefs = reactContext.getSharedPreferences("GN", Context.MODE_PRIVATE)
+        prefs.edit().putString("child_id", id).apply()
+    }
+
     @ReactMethod
     fun startLocation() {
         val intent = Intent(reactContext, LocationService::class.java)
