@@ -24,35 +24,38 @@ export default function Child() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    init();
+    safeInit();
   }, []);
 
-  const init = async () => {
+  // ================= SAFE INIT =================
+  const safeInit = async () => {
     try {
-      const savedName = (await AsyncStorage.getItem("child_name")) || "";
+      const savedName = await AsyncStorage.getItem("child_name");
 
-      if (!savedName) {
+      if (!savedName || savedName.trim().length === 0) {
         setLoading(false);
         return;
       }
 
       await setup(savedName);
+
     } catch (e) {
       console.log("INIT ERROR:", e);
       setLoading(false);
     }
   };
 
+  // ================= SETUP =================
   const setup = async (childName: string) => {
     try {
       if (!childName || childName.trim().length === 0) {
         throw new Error("Invalid child name");
       }
 
-      let c = (await AsyncStorage.getItem("child_code")) || "";
-      let id = (await AsyncStorage.getItem("child_id")) || "";
+      let c = await AsyncStorage.getItem("child_code");
+      let id = await AsyncStorage.getItem("child_id");
 
-      // 🔥 CREATE CHILD
+      // ================= CREATE CHILD =================
       if (!c || !id) {
         const res = await api("/children/create", {
           method: "POST",
@@ -67,36 +70,48 @@ export default function Child() {
           throw new Error("Invalid backend response");
         }
 
-        c = res.child_public_id;
-        id = res.child_id;
+        c = String(res.child_public_id);
+        id = String(res.child_id);
 
         await AsyncStorage.setItem("child_code", c);
         await AsyncStorage.setItem("child_id", id);
       }
 
-      setCode(c);
-      setChildId(id);
+      // ================= SAFE STATE =================
+      const safeCode = c || "";
+      const safeId = id || "";
+
+      setCode(safeCode);
+      setChildId(safeId);
       setName(childName);
 
-      // 🔥 SAFE NATIVE CALLS
-      try {
-        if (UsageModule?.setChildId && id) {
-          UsageModule.setChildId(id);
+      // ================= SAFE NATIVE =================
+      if (!UsageModule) {
+        console.log("⚠ UsageModule NOT LINKED");
+      } else {
+        try {
+          if (UsageModule.setChildId && safeId) {
+            UsageModule.setChildId(safeId);
+          }
+        } catch (e) {
+          console.log("setChildId error:", e);
         }
-      } catch (e) {
-        console.log("setChildId error:", e);
-      }
 
-      try {
-        UsageModule?.startService?.();
-      } catch (e) {
-        console.log("startService error:", e);
-      }
+        try {
+          if (UsageModule.startService) {
+            UsageModule.startService();
+          }
+        } catch (e) {
+          console.log("startService error:", e);
+        }
 
-      try {
-        UsageModule?.startLocation?.();
-      } catch (e) {
-        console.log("startLocation error:", e);
+        try {
+          if (UsageModule.startLocation) {
+            UsageModule.startLocation();
+          }
+        } catch (e) {
+          console.log("startLocation error:", e);
+        }
       }
 
     } catch (e: any) {
@@ -105,13 +120,21 @@ export default function Child() {
       Alert.alert(
         "Setup Failed",
         e?.message || "Something went wrong",
-        [{ text: "Retry", onPress: () => setLoading(false) }]
+        [
+          {
+            text: "Retry",
+            onPress: () => {
+              setLoading(false);
+            },
+          },
+        ]
       );
     } finally {
       setLoading(false);
     }
   };
 
+  // ================= SAVE NAME =================
   const saveName = async () => {
     if (!name.trim()) {
       Alert.alert("Error", "Please enter a name");
@@ -120,19 +143,26 @@ export default function Child() {
 
     try {
       await AsyncStorage.setItem("child_name", name);
+
       setLoading(true);
-      await setup(name);
+
+      // 🔥 slight delay to avoid race crash
+      setTimeout(() => {
+        setup(name);
+      }, 200);
+
     } catch (e) {
       Alert.alert("Error", "Failed to save name");
       setLoading(false);
     }
   };
 
+  // ================= SETTINGS =================
   const openSettings = () => {
     Linking.openSettings();
   };
 
-  // 🔄 LOADING
+  // ================= LOADING =================
   if (loading) {
     return (
       <View style={styles.loader}>
@@ -142,7 +172,7 @@ export default function Child() {
     );
   }
 
-  // 🧒 FIRST TIME
+  // ================= FIRST TIME =================
   if (!code) {
     return (
       <View style={styles.container}>
@@ -167,7 +197,7 @@ export default function Child() {
     );
   }
 
-  // ✅ MAIN UI
+  // ================= MAIN =================
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Child Device</Text>
@@ -182,6 +212,7 @@ export default function Child() {
         Enter this code on parent device
       </Text>
 
+      {/* PERMISSIONS */}
       <View style={styles.card}>
         <Text style={styles.cardTitle}>Permissions</Text>
 
@@ -194,6 +225,7 @@ export default function Child() {
         </TouchableOpacity>
       </View>
 
+      {/* BATTERY */}
       <View style={styles.card}>
         <Text style={styles.cardTitle}>Battery Optimization</Text>
 
@@ -206,6 +238,7 @@ export default function Child() {
         </TouchableOpacity>
       </View>
 
+      {/* STATUS */}
       <View style={styles.status}>
         <Text style={styles.statusText}>✔ Tracking Active</Text>
         <Text style={styles.sub}>
