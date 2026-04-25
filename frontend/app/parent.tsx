@@ -30,24 +30,44 @@ export default function Parent() {
 
   const [code, setCode] = useState("");
 
-  // LOAD CHILDREN
+  // 🔥 NEW: LIMITS
+  const [limitApp, setLimitApp] = useState("");
+  const [limitMinutes, setLimitMinutes] = useState("");
+
+  // ================= LOAD =================
   useEffect(() => {
     loadChildren();
   }, []);
 
-  // LOAD DATA
   useEffect(() => {
-    if (selected) loadData();
+    if (selected) {
+      loadData();
+      startRealtime(); // 🔥 NEW
+    }
   }, [selected]);
 
-  // REAL-TIME
-  useEffect(() => {
-    const i = setInterval(() => {
-      if (selected) loadData();
-    }, 4000);
-    return () => clearInterval(i);
-  }, [selected]);
+  // ================= REALTIME =================
+  const startRealtime = () => {
+    const ws = new WebSocket(
+      `wss://gaurdian-nest.onrender.com/ws/${selected}`
+    );
 
+    ws.onmessage = (e) => {
+      try {
+        const data = JSON.parse(e.data);
+
+        if (data.type === "limit") {
+          Alert.alert("Limit Exceeded 🚨", data.app);
+        }
+
+        loadData();
+      } catch {}
+    };
+
+    return () => ws.close();
+  };
+
+  // ================= LOAD CHILDREN =================
   const loadChildren = async () => {
     try {
       const res = await api("/children/list");
@@ -67,31 +87,29 @@ export default function Parent() {
     }
   };
 
+  // ================= LOAD DATA =================
   const loadData = async () => {
     try {
       setDataLoading(true);
 
       const res = await api(`/activity/daily?child_id=${selected}`);
 
-      if (!res?.error) {
-        // ✅ FIX: backend returns array directly
-        const appsData = res || [];
+      const appsData = res?.apps || res || [];
 
-        const sorted = appsData.sort(
-          (a: any, b: any) => (b.minutes || 0) - (a.minutes || 0)
-        );
+      const sorted = appsData.sort(
+        (a: any, b: any) => (b.minutes || 0) - (a.minutes || 0)
+      );
 
-        setApps(sorted);
+      setApps(sorted);
 
-        const totalMinutes = sorted.reduce(
-          (sum: number, a: any) => sum + (a.minutes || 0),
-          0
-        );
+      const totalMinutes = sorted.reduce(
+        (sum: number, a: any) => sum + (a.minutes || 0),
+        0
+      );
 
-        setTotal(totalMinutes);
+      setTotal(totalMinutes);
 
-        setTopApp(sorted[0]?.app || null);
-      }
+      setTopApp(sorted[0]?.app || null);
 
       const child = children.find((c) => c.child_id === selected);
       setSelectedChild(child);
@@ -103,6 +121,7 @@ export default function Parent() {
     }
   };
 
+  // ================= LINK =================
   const linkChild = async () => {
     try {
       const res = await api("/children/link", {
@@ -121,7 +140,23 @@ export default function Parent() {
     }
   };
 
-  // CHART DATA
+  // ================= SET LIMIT =================
+  const saveLimit = async () => {
+    if (!limitApp || !limitMinutes) return;
+
+    await api("/limits/set", {
+      method: "POST",
+      body: JSON.stringify({
+        child_id: selected,
+        app: limitApp,
+        limit: Number(limitMinutes),
+      }),
+    });
+
+    Alert.alert("Limit saved");
+  };
+
+  // ================= CHART =================
   const chartData = {
     labels: apps.slice(0, 5).map((a) =>
       a.app?.split(".").pop()?.slice(0, 5) || "App"
@@ -129,7 +164,7 @@ export default function Parent() {
     datasets: [{ data: apps.slice(0, 5).map((a) => a.minutes || 0) }],
   };
 
-  // LOADING
+  // ================= LOADING =================
   if (loading) {
     return (
       <View style={styles.loader}>
@@ -160,6 +195,34 @@ export default function Parent() {
         </TouchableOpacity>
       </View>
 
+      {/* 🔥 LIMIT UI (NEW, UI MATCHED) */}
+      {selected && (
+        <View style={styles.card}>
+          <Text style={styles.title}>Set App Limit</Text>
+
+          <TextInput
+            placeholder="App name"
+            placeholderTextColor="#888"
+            value={limitApp}
+            onChangeText={setLimitApp}
+            style={styles.input}
+          />
+
+          <TextInput
+            placeholder="Minutes"
+            placeholderTextColor="#888"
+            value={limitMinutes}
+            onChangeText={setLimitMinutes}
+            style={styles.input}
+            keyboardType="numeric"
+          />
+
+          <TouchableOpacity style={styles.button} onPress={saveLimit}>
+            <Text style={styles.buttonText}>Save Limit</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
       {/* NO DEVICES */}
       {children.length === 0 && (
         <View style={styles.emptyBox}>
@@ -185,6 +248,14 @@ export default function Parent() {
               >
                 <Text style={styles.childText}>
                   {c.name || "Child"}
+                </Text>
+
+                {/* 🔥 ONLINE STATUS */}
+                <Text style={{
+                  fontSize: 10,
+                  color: c.online ? "#00C9A7" : "#888"
+                }}>
+                  {c.online ? "● Online" : "● Offline"}
                 </Text>
               </TouchableOpacity>
             ))}
@@ -229,7 +300,7 @@ export default function Parent() {
                 data={chartData}
                 width={width - 40}
                 height={220}
-                yAxisLabel=""  // ✅ FIX
+                yAxisLabel="" 
                 yAxisSuffix="m"
                 fromZero
                 chartConfig={{
@@ -277,78 +348,51 @@ const styles = StyleSheet.create({
     paddingTop: StatusBar.currentHeight || 40,
     padding: 16,
   },
-
   header: {
     fontSize: 28,
     color: "#fff",
     fontWeight: "bold",
     marginBottom: 20,
   },
-
   loader: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
     backgroundColor: "#0B1F2A",
   },
-
-  loadingText: {
-    color: "#aaa",
-    marginTop: 10,
-  },
-
+  loadingText: { color: "#aaa", marginTop: 10 },
   card: {
     backgroundColor: "#132F3D",
     padding: 16,
     borderRadius: 14,
     marginBottom: 16,
   },
-
   infoCard: {
     backgroundColor: "#132F3D",
     padding: 16,
     borderRadius: 14,
     marginBottom: 16,
   },
-
-  childName: {
-    color: "#fff",
-    fontSize: 18,
-    fontWeight: "bold",
-  },
-
-  childId: {
-    color: "#aaa",
-    fontSize: 12,
-  },
-
+  childName: { color: "#fff", fontSize: 18, fontWeight: "bold" },
+  childId: { color: "#aaa", fontSize: 12 },
   statCard: {
     backgroundColor: "#00C9A7",
     padding: 20,
     borderRadius: 16,
     marginBottom: 16,
   },
-
   statLabel: { color: "#000" },
-
   statValue: {
     color: "#000",
     fontSize: 30,
     fontWeight: "bold",
   },
-
-  title: {
-    color: "#fff",
-    marginBottom: 10,
-    fontWeight: "600",
-  },
-
+  title: { color: "#fff", marginBottom: 10, fontWeight: "600" },
   highlight: {
     color: "#00C9A7",
     fontSize: 20,
     fontWeight: "bold",
   },
-
   input: {
     backgroundColor: "#0B1F2A",
     padding: 12,
@@ -356,49 +400,40 @@ const styles = StyleSheet.create({
     color: "#fff",
     marginBottom: 10,
   },
-
   button: {
     backgroundColor: "#00C9A7",
     padding: 14,
     borderRadius: 10,
     alignItems: "center",
   },
-
   buttonText: {
     color: "#000",
     fontWeight: "bold",
   },
-
   emptyBox: {
     alignItems: "center",
     marginTop: 40,
   },
-
   emptyTitle: {
     color: "#fff",
     fontSize: 18,
   },
-
   emptySub: {
     color: "#aaa",
     textAlign: "center",
   },
-
   child: {
     padding: 10,
     backgroundColor: "#132F3D",
     marginRight: 10,
     borderRadius: 10,
   },
-
   active: {
     backgroundColor: "#00C9A7",
   },
-
   childText: {
     color: "#fff",
   },
-
   appRow: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -406,9 +441,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: "#1f3f4a",
   },
-
   appName: { color: "#fff" },
-
   appTime: {
     color: "#00C9A7",
     fontWeight: "bold",

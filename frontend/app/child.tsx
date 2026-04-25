@@ -9,6 +9,7 @@ import {
   Linking,
   StatusBar,
   Platform,
+  Alert,
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { NativeModules } from "react-native";
@@ -28,7 +29,7 @@ export default function Child() {
 
   const init = async () => {
     try {
-      const savedName = await AsyncStorage.getItem("child_name");
+      const savedName = (await AsyncStorage.getItem("child_name")) || "";
 
       if (!savedName) {
         setLoading(false);
@@ -36,7 +37,6 @@ export default function Child() {
       }
 
       await setup(savedName);
-
     } catch (e) {
       console.log("INIT ERROR:", e);
       setLoading(false);
@@ -45,54 +45,87 @@ export default function Child() {
 
   const setup = async (childName: string) => {
     try {
-      let c = await AsyncStorage.getItem("child_code");
-      let id = await AsyncStorage.getItem("child_id");
+      if (!childName || childName.trim().length === 0) {
+        throw new Error("Invalid child name");
+      }
 
-      // 🔥 CREATE CHILD IF NOT EXISTS
+      let c = (await AsyncStorage.getItem("child_code")) || "";
+      let id = (await AsyncStorage.getItem("child_id")) || "";
+
+      // 🔥 CREATE CHILD
       if (!c || !id) {
         const res = await api("/children/create", {
           method: "POST",
           body: JSON.stringify({ name: childName }),
         });
 
-        if (res?.error) throw new Error(res.message);
+        if (!res || res.error) {
+          throw new Error(res?.message || "Backend error");
+        }
+
+        if (!res.child_public_id || !res.child_id) {
+          throw new Error("Invalid backend response");
+        }
 
         c = res.child_public_id;
         id = res.child_id;
 
-        if (c) await AsyncStorage.setItem("child_code", c);
-        if (id) await AsyncStorage.setItem("child_id", id);
+        await AsyncStorage.setItem("child_code", c);
+        await AsyncStorage.setItem("child_id", id);
       }
 
-      const safeCode = c || "";
-      const safeId = id || "";
-
-      setCode(safeCode);
-      setChildId(safeId);
+      setCode(c);
+      setChildId(id);
       setName(childName);
 
-      // 🔥 CRITICAL FIX: persist ID for Android service
-      if (safeId) {
-        UsageModule?.setChildId?.(safeId);
+      // 🔥 SAFE NATIVE CALLS
+      try {
+        if (UsageModule?.setChildId && id) {
+          UsageModule.setChildId(id);
+        }
+      } catch (e) {
+        console.log("setChildId error:", e);
       }
 
-      // 🚀 START SERVICES
-      UsageModule?.startService?.();
-      UsageModule?.startLocation?.();
+      try {
+        UsageModule?.startService?.();
+      } catch (e) {
+        console.log("startService error:", e);
+      }
 
-    } catch (e) {
+      try {
+        UsageModule?.startLocation?.();
+      } catch (e) {
+        console.log("startLocation error:", e);
+      }
+
+    } catch (e: any) {
       console.log("SETUP ERROR:", e);
+
+      Alert.alert(
+        "Setup Failed",
+        e?.message || "Something went wrong",
+        [{ text: "Retry", onPress: () => setLoading(false) }]
+      );
     } finally {
       setLoading(false);
     }
   };
 
   const saveName = async () => {
-    if (!name.trim()) return;
+    if (!name.trim()) {
+      Alert.alert("Error", "Please enter a name");
+      return;
+    }
 
-    await AsyncStorage.setItem("child_name", name);
-    setLoading(true);
-    setup(name);
+    try {
+      await AsyncStorage.setItem("child_name", name);
+      setLoading(true);
+      await setup(name);
+    } catch (e) {
+      Alert.alert("Error", "Failed to save name");
+      setLoading(false);
+    }
   };
 
   const openSettings = () => {
@@ -149,7 +182,6 @@ export default function Child() {
         Enter this code on parent device
       </Text>
 
-      {/* 🔐 PERMISSIONS */}
       <View style={styles.card}>
         <Text style={styles.cardTitle}>Permissions</Text>
 
@@ -162,7 +194,6 @@ export default function Child() {
         </TouchableOpacity>
       </View>
 
-      {/* 🔋 BATTERY */}
       <View style={styles.card}>
         <Text style={styles.cardTitle}>Battery Optimization</Text>
 
@@ -175,7 +206,6 @@ export default function Child() {
         </TouchableOpacity>
       </View>
 
-      {/* STATUS */}
       <View style={styles.status}>
         <Text style={styles.statusText}>✔ Tracking Active</Text>
         <Text style={styles.sub}>
@@ -196,25 +226,21 @@ const styles = StyleSheet.create({
     padding: 20,
     alignItems: "center",
   },
-
   title: {
     fontSize: 26,
     color: "#fff",
     fontWeight: "bold",
     marginBottom: 10,
   },
-
   subtitle: {
     color: "#aaa",
     marginBottom: 20,
   },
-
   name: {
     color: "#00C9A7",
     fontSize: 18,
     marginBottom: 10,
   },
-
   input: {
     backgroundColor: "#132F3D",
     width: "100%",
@@ -223,7 +249,6 @@ const styles = StyleSheet.create({
     color: "#fff",
     marginBottom: 15,
   },
-
   btn: {
     backgroundColor: "#00C9A7",
     padding: 14,
@@ -231,12 +256,10 @@ const styles = StyleSheet.create({
     width: "100%",
     alignItems: "center",
   },
-
   btnText: {
     color: "#000",
     fontWeight: "bold",
   },
-
   codeBox: {
     backgroundColor: "#132F3D",
     paddingVertical: 20,
@@ -244,19 +267,16 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     marginVertical: 20,
   },
-
   code: {
     fontSize: 36,
     color: "#00C9A7",
     fontWeight: "bold",
     letterSpacing: 3,
   },
-
   desc: {
     color: "#aaa",
     marginBottom: 20,
   },
-
   card: {
     backgroundColor: "#132F3D",
     padding: 16,
@@ -264,18 +284,15 @@ const styles = StyleSheet.create({
     width: "100%",
     marginBottom: 15,
   },
-
   cardTitle: {
     color: "#fff",
     marginBottom: 10,
     fontWeight: "bold",
   },
-
   item: {
     color: "#ccc",
     marginBottom: 4,
   },
-
   smallBtn: {
     backgroundColor: "#00C9A7",
     padding: 10,
@@ -283,12 +300,10 @@ const styles = StyleSheet.create({
     marginTop: 10,
     alignItems: "center",
   },
-
   smallBtnText: {
     color: "#000",
     fontWeight: "bold",
   },
-
   status: {
     backgroundColor: "#132F3D",
     padding: 16,
@@ -297,30 +312,25 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginTop: 10,
   },
-
   statusText: {
     color: "#00C9A7",
     fontWeight: "bold",
   },
-
   sub: {
     color: "#aaa",
     fontSize: 12,
   },
-
   meta: {
     color: "#555",
     marginTop: 10,
     fontSize: 10,
   },
-
   loader: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
     backgroundColor: "#0B1F2A",
   },
-
   loadingText: {
     marginTop: 10,
     color: "#aaa",

@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from datetime import datetime
@@ -22,6 +22,29 @@ def new_id():
     return uuid.uuid4().hex
 
 
+# ================= REALTIME =================
+class Manager:
+    def __init__(self):
+        self.clients = {}
+
+    async def connect(self, ws: WebSocket, parent_id: str):
+        await ws.accept()
+        self.clients.setdefault(parent_id, []).append(ws)
+
+    def disconnect(self, ws, parent_id):
+        if parent_id in self.clients:
+            self.clients[parent_id].remove(ws)
+
+    async def send(self, parent_id, data):
+        for ws in self.clients.get(parent_id, []):
+            try:
+                await ws.send_json(data)
+            except:
+                pass
+
+manager = Manager()
+
+
 # ================= AUTH =================
 async def get_user(req: Request):
     token = req.headers.get("Authorization", "").replace("Bearer ", "")
@@ -31,28 +54,11 @@ async def get_user(req: Request):
     return await db.users.find_one({"_id": session["user_id"]})
 
 
-# ================= USER REGISTER =================
-@app.post("/api/user/register")
-async def register_user(data: dict, req: Request):
-    name = data.get("name")
-
-    if not name:
-        raise HTTPException(400, "Name required")
-
-    user = await get_user(req)
-
-    await db.users.update_one(
-        {"_id": user["_id"]},
-        {"$set": {"name": name}}
-    )
-
-    return {"ok": True}
-
-
 # ================= LOGIN =================
 @app.post("/api/auth/google")
 async def login(data: dict):
     email = data.get("email") or "fallback@user.dev"
+    name = data.get("name")
 
     user = await db.users.find_one({"email": email})
 
@@ -62,9 +68,12 @@ async def login(data: dict):
             "email": email,
             "role": "parent",
             "is_admin": email == ADMIN_EMAIL,
-            "name": None
+            "name": name
         }
         await db.users.insert_one(user)
+    else:
+        if name:
+            await db.users.update_one({"_id": user["_id"]}, {"$set": {"name": name}})
 
     token = "tok_" + new_id()
 
@@ -76,19 +85,18 @@ async def login(data: dict):
     return {"session_token": token, "user": user}
 
 
-# ================= CHILD CREATE =================
+# ================= CHILD =================
 @app.post("/api/children/create")
 async def create_child(data: dict = {}):
     code = uuid.uuid4().hex[:6].upper()
-    name = data.get("name", "Child Device")
 
     child = {
         "_id": new_id(),
         "role": "child",
-        "name": name,
+        "name": data.get("name", "Child"),
         "child_public_id": code,
         "linked": False,
-        "created_at": now()
+        "last_seen": now()
     }
 
     await db.users.insert_one(child)
@@ -96,11 +104,10 @@ async def create_child(data: dict = {}):
     return {
         "child_id": child["_id"],
         "child_public_id": code,
-        "name": name
+        "name": child["name"]
     }
 
 
-# ================= LINK =================
 @app.post("/api/children/link")
 async def link_child(data: dict, req: Request):
     parent = await get_user(req)
@@ -118,8 +125,7 @@ async def link_child(data: dict, req: Request):
 
     await db.links.insert_one({
         "parent_id": parent["_id"],
-        "child_id": child["_id"],
-        "linked_at": now()
+        "child_id": child["_id"]
     })
 
     await db.users.update_one(
@@ -127,14 +133,9 @@ async def link_child(data: dict, req: Request):
         {"$set": {"linked": True}}
     )
 
-    return {
-        "ok": True,
-        "child_name": child.get("name"),
-        "child_id": child["_id"]
-    }
+    return {"ok": True}
 
 
-# ================= LIST CHILDREN =================
 @app.get("/api/children/list")
 async def list_children(req: Request):
     parent = await get_user(req)
@@ -145,107 +146,116 @@ async def list_children(req: Request):
     async for l in links:
         child = await db.users.find_one({"_id": l["child_id"]})
         if child:
+            online = (now() - child.get("last_seen", now())).seconds < 20
+
             result.append({
                 "child_id": child["_id"],
+                "name": child.get("name"),
                 "code": child.get("child_public_id"),
-                "name": child.get("name", "Unknown"),
-                "linked": child.get("linked", False)
+                "online": online
             })
 
+    return result
+
+
+# ================= LIMITS =================
+@app.post("/api/limits/set")
+async def set_limit(data: dict):
+    await db.limits.update_one(
+        {"child_id": data["child_id"], "app": data["app"]},
+        {"$set": {"limit": data["limit"]}},
+        upsert=True
+    )
+    return {"ok": True}
+
+
+@app.get("/api/limits/get")
+async def get_limits(child_id: str):
+    result = []
+    async for l in db.limits.find({"child_id": child_id}):
+        result.append({
+            "app": l["app"],
+            "limit": l["limit"]
+        })
     return result
 
 
 # ================= ACTIVITY =================
 @app.post("/api/activity/log")
 async def log(data: dict):
-    child_id = data.get("child_id")
-
-    # 🔥 VALIDATION
-    child = await db.users.find_one({"_id": child_id, "role": "child"})
-    if not child:
-        raise HTTPException(400, "Invalid child")
+    child_id = data["child_id"]
 
     await db.activity.insert_one({
         "child_id": child_id,
         "app": data["app"],
         "duration": data["duration"],
-        "hour": now().hour,
-        "date": today()
+        "date": today(),
+        "hour": now().hour
     })
+
+    await db.users.update_one(
+        {"_id": child_id},
+        {"$set": {"last_seen": now()}}
+    )
+
+    # 🔥 LIMIT CHECK
+    limit_doc = await db.limits.find_one({
+        "child_id": child_id,
+        "app": data["app"]
+    })
+
+    if limit_doc:
+        total = 0
+        async for d in db.activity.find({
+            "child_id": child_id,
+            "app": data["app"],
+            "date": today()
+        }):
+            total += d["duration"]
+
+        if total >= limit_doc["limit"] * 60:
+            link = await db.links.find_one({"child_id": child_id})
+            if link:
+                await manager.send(link["parent_id"], {
+                    "type": "limit",
+                    "app": data["app"]
+                })
+
+    # 🔥 REALTIME ACTIVITY
+    link = await db.links.find_one({"child_id": child_id})
+    if link:
+        await manager.send(link["parent_id"], {"type": "activity"})
 
     return {"ok": True}
 
 
 # ================= ANALYTICS =================
 @app.get("/api/activity/daily")
-async def daily(req: Request, child_id: str = None):
-    user = await get_user(req)
-
-    links = db.links.find({"parent_id": user["_id"]})
-    child_ids = [l["child_id"] async for l in links]
-
-    if child_id:
-        child_ids = [child_id]
-
+async def daily(req: Request, child_id: str):
     stats = defaultdict(int)
-    hours = defaultdict(int)
 
     async for d in db.activity.find({
-        "child_id": {"$in": child_ids},
+        "child_id": child_id,
         "date": today()
     }):
         stats[d["app"]] += d["duration"]
-        hours[d["hour"]] += d["duration"]
 
-    apps = [
-        {"app": k, "minutes": v // 60}
-        for k, v in stats.items()
-    ]
+    apps = [{"app": k, "minutes": v // 60} for k, v in stats.items()]
 
-    apps.sort(key=lambda x: x["minutes"], reverse=True)
-
-    top_app = apps[0]["app"] if apps else None
-    peak_hour = max(hours, key=hours.get) if hours else None
-
-    return {
-        "apps": apps,
-        "top_app": top_app,
-        "peak_hour": peak_hour,
-        "total_minutes": sum(a["minutes"] for a in apps)
-    }
+    return {"apps": apps}
 
 
-# ================= LOCATION =================
-@app.post("/api/location/update")
-async def loc(data: dict):
-    child_id = data.get("child_id")
-
-    if not child_id:
-        raise HTTPException(400, "child_id required")
-
-    await db.location.update_one(
-        {"child_id": child_id},
-        {"$set": data},
-        upsert=True
-    )
-
-    return {"ok": True}
+# ================= SOCKET =================
+@app.websocket("/ws/{parent_id}")
+async def ws(websocket: WebSocket, parent_id: str):
+    await manager.connect(websocket, parent_id)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(websocket, parent_id)
 
 
-@app.get("/api/location/latest")
-async def loc_get(req: Request, child_id: str = None):
-    user = await get_user(req)
-
-    if not child_id:
-        link = await db.links.find_one({"parent_id": user["_id"]})
-        if not link:
-            return {}
-        child_id = link["child_id"]
-
-    return await db.location.find_one({"child_id": child_id}) or {}
-
-
-# ================= CORS =================
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
