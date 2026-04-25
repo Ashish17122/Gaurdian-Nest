@@ -77,7 +77,6 @@ export default function Child() {
         await AsyncStorage.setItem("child_id", id);
       }
 
-      // ================= SAFE STATE =================
       const safeCode = c || "";
       const safeId = id || "";
 
@@ -88,10 +87,16 @@ export default function Child() {
       // ================= SAFE NATIVE =================
       if (!UsageModule) {
         console.log("⚠ UsageModule NOT LINKED");
-      } else {
+        return;
+      }
+
+      // 🔥 prevent multiple service starts
+      const started = await AsyncStorage.getItem("service_started");
+
+      if (!started) {
         try {
           if (UsageModule.setChildId && safeId) {
-            UsageModule.setChildId(safeId);
+            await UsageModule.setChildId(safeId);
           }
         } catch (e) {
           console.log("setChildId error:", e);
@@ -99,7 +104,7 @@ export default function Child() {
 
         try {
           if (UsageModule.startService) {
-            UsageModule.startService();
+            await UsageModule.startService(); // ✅ promise-safe
           }
         } catch (e) {
           console.log("startService error:", e);
@@ -107,11 +112,13 @@ export default function Child() {
 
         try {
           if (UsageModule.startLocation) {
-            UsageModule.startLocation();
+            await UsageModule.startLocation();
           }
         } catch (e) {
           console.log("startLocation error:", e);
         }
+
+        await AsyncStorage.setItem("service_started", "true");
       }
 
     } catch (e: any) {
@@ -123,9 +130,7 @@ export default function Child() {
         [
           {
             text: "Retry",
-            onPress: () => {
-              setLoading(false);
-            },
+            onPress: () => setLoading(false),
           },
         ]
       );
@@ -146,7 +151,6 @@ export default function Child() {
 
       setLoading(true);
 
-      // 🔥 slight delay to avoid race crash
       setTimeout(() => {
         setup(name);
       }, 200);
