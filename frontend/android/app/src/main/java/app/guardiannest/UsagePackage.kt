@@ -13,6 +13,14 @@ class UsagePackage : ReactPackage {
         return listOf(UsageModule(reactContext))
     }
 
+    override fun createNativeModules(
+        reactContext: ReactApplicationContext
+    ): List<NativeModule> {
+        return listOf(
+            UsageModule(reactContext),
+            AppListModule(reactContext) // 🔥 ADD THIS
+        )
+    }
     override fun createViewManagers(
         reactContext: ReactApplicationContext
     ): List<ViewManager<*, *>> {
