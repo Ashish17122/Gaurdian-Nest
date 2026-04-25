@@ -28,7 +28,7 @@ export default function Child() {
 
   const init = async () => {
     try {
-      let savedName = await AsyncStorage.getItem("child_name");
+      const savedName = await AsyncStorage.getItem("child_name");
 
       if (!savedName) {
         setLoading(false);
@@ -36,8 +36,9 @@ export default function Child() {
       }
 
       await setup(savedName);
+
     } catch (e) {
-      console.log(e);
+      console.log("INIT ERROR:", e);
       setLoading(false);
     }
   };
@@ -47,11 +48,14 @@ export default function Child() {
       let c = await AsyncStorage.getItem("child_code");
       let id = await AsyncStorage.getItem("child_id");
 
+      // 🔥 CREATE CHILD IF NOT EXISTS
       if (!c || !id) {
         const res = await api("/children/create", {
           method: "POST",
           body: JSON.stringify({ name: childName }),
         });
+
+        if (res?.error) throw new Error(res.message);
 
         c = res.child_public_id;
         id = res.child_id;
@@ -67,14 +71,17 @@ export default function Child() {
       setChildId(safeId);
       setName(childName);
 
+      // 🔥 CRITICAL FIX: persist ID for Android service
       if (safeId) {
         UsageModule?.setChildId?.(safeId);
       }
 
+      // 🚀 START SERVICES
       UsageModule?.startService?.();
+      UsageModule?.startLocation?.();
 
     } catch (e) {
-      console.log("Child setup error:", e);
+      console.log("SETUP ERROR:", e);
     } finally {
       setLoading(false);
     }
@@ -102,7 +109,7 @@ export default function Child() {
     );
   }
 
-  // 🧒 FIRST TIME NAME INPUT
+  // 🧒 FIRST TIME
   if (!code) {
     return (
       <View style={styles.container}>

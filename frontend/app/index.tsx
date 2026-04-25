@@ -14,19 +14,25 @@ export default function Index() {
       const role = await AsyncStorage.getItem("gn_role");
       const name = await AsyncStorage.getItem("user_name");
 
-      // 🔥 STEP 1: ensure name exists
+      // 🔥 STEP 1: choose role FIRST
+      if (!role) {
+        router.replace("/role");
+        return;
+      }
+
+      // 🔥 STEP 2: login required
+      if (!token) {
+        router.replace("/login");
+        return;
+      }
+
+      // 🔥 STEP 3: name AFTER login
       if (!name) {
         router.replace("/register" as any);
         return;
       }
 
-      // 🔥 STEP 2: not logged in
-      if (!token) {
-        router.replace("/role");
-        return;
-      }
-
-      // 🔥 STEP 3: route based on role
+      // 🔥 STEP 4: route
       if (role === "child") {
         router.replace("/child");
       } else if (role === "admin") {
@@ -36,7 +42,7 @@ export default function Index() {
       }
 
     } catch (e) {
-      console.log("Init error:", e);
+      console.log(e);
       router.replace("/role");
     }
   };
@@ -44,7 +50,7 @@ export default function Index() {
   return (
     <View style={styles.container}>
       <StatusBar barStyle="light-content" />
-      <ActivityIndicator color="#00C9A7" size="large" />
+      <ActivityIndicator size="large" color="#00C9A7" />
     </View>
   );
 }

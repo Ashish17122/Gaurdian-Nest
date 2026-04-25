@@ -31,7 +31,7 @@ async def get_user(req: Request):
     return await db.users.find_one({"_id": session["user_id"]})
 
 
-# ================= USER REGISTER (🔥 NEW) =================
+# ================= USER REGISTER =================
 @app.post("/api/user/register")
 async def register_user(data: dict, req: Request):
     name = data.get("name")
@@ -158,13 +158,21 @@ async def list_children(req: Request):
 # ================= ACTIVITY =================
 @app.post("/api/activity/log")
 async def log(data: dict):
+    child_id = data.get("child_id")
+
+    # 🔥 VALIDATION
+    child = await db.users.find_one({"_id": child_id, "role": "child"})
+    if not child:
+        raise HTTPException(400, "Invalid child")
+
     await db.activity.insert_one({
-        "child_id": data["child_id"],
+        "child_id": child_id,
         "app": data["app"],
         "duration": data["duration"],
         "hour": now().hour,
         "date": today()
     })
+
     return {"ok": True}
 
 
@@ -189,25 +197,34 @@ async def daily(req: Request, child_id: str = None):
         stats[d["app"]] += d["duration"]
         hours[d["hour"]] += d["duration"]
 
-    # 🔥 insights
-    top_app = max(stats, key=stats.get) if stats else None
+    apps = [
+        {"app": k, "minutes": v // 60}
+        for k, v in stats.items()
+    ]
+
+    apps.sort(key=lambda x: x["minutes"], reverse=True)
+
+    top_app = apps[0]["app"] if apps else None
     peak_hour = max(hours, key=hours.get) if hours else None
 
     return {
-        "apps": [{"app": k, "minutes": v // 60} for k, v in stats.items()],
+        "apps": apps,
         "top_app": top_app,
         "peak_hour": peak_hour,
-        "total_minutes": sum(stats.values()) // 60
+        "total_minutes": sum(a["minutes"] for a in apps)
     }
 
 
 # ================= LOCATION =================
 @app.post("/api/location/update")
-async def loc(data: dict, req: Request):
-    user = await get_user(req)
+async def loc(data: dict):
+    child_id = data.get("child_id")
+
+    if not child_id:
+        raise HTTPException(400, "child_id required")
 
     await db.location.update_one(
-        {"child_id": user["_id"]},
+        {"child_id": child_id},
         {"$set": data},
         upsert=True
     )

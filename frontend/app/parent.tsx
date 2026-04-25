@@ -20,16 +20,32 @@ export default function Parent() {
   const [children, setChildren] = useState<any[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [selectedChild, setSelectedChild] = useState<any>(null);
+
   const [apps, setApps] = useState<any[]>([]);
+  const [total, setTotal] = useState(0);
+  const [topApp, setTopApp] = useState<string | null>(null);
+
   const [loading, setLoading] = useState(true);
+  const [dataLoading, setDataLoading] = useState(false);
+
   const [code, setCode] = useState("");
 
+  // LOAD CHILDREN
   useEffect(() => {
     loadChildren();
   }, []);
 
+  // LOAD DATA
   useEffect(() => {
     if (selected) loadData();
+  }, [selected]);
+
+  // REAL-TIME
+  useEffect(() => {
+    const i = setInterval(() => {
+      if (selected) loadData();
+    }, 4000);
+    return () => clearInterval(i);
   }, [selected]);
 
   const loadChildren = async () => {
@@ -53,13 +69,28 @@ export default function Parent() {
 
   const loadData = async () => {
     try {
+      setDataLoading(true);
+
       const res = await api(`/activity/daily?child_id=${selected}`);
 
       if (!res?.error) {
-        const sorted = (res || []).sort(
+        // ✅ FIX: backend returns array directly
+        const appsData = res || [];
+
+        const sorted = appsData.sort(
           (a: any, b: any) => (b.minutes || 0) - (a.minutes || 0)
         );
+
         setApps(sorted);
+
+        const totalMinutes = sorted.reduce(
+          (sum: number, a: any) => sum + (a.minutes || 0),
+          0
+        );
+
+        setTotal(totalMinutes);
+
+        setTopApp(sorted[0]?.app || null);
       }
 
       const child = children.find((c) => c.child_id === selected);
@@ -67,6 +98,8 @@ export default function Parent() {
 
     } catch (e) {
       console.log(e);
+    } finally {
+      setDataLoading(false);
     }
   };
 
@@ -79,33 +112,29 @@ export default function Parent() {
 
       if (res?.error) throw new Error(res.message);
 
-      Alert.alert("Child linked!");
+      Alert.alert("Device linked");
       setCode("");
       loadChildren();
+
     } catch (e: any) {
       Alert.alert("Error", e.message);
     }
   };
 
-  // 🔥 ANALYTICS
-  const totalMinutes = apps.reduce((sum, a) => sum + (a.minutes || 0), 0);
-
+  // CHART DATA
   const chartData = {
     labels: apps.slice(0, 5).map((a) =>
       a.app?.split(".").pop()?.slice(0, 5) || "App"
     ),
-    datasets: [
-      {
-        data: apps.slice(0, 5).map((a) => a.minutes || 0),
-      },
-    ],
+    datasets: [{ data: apps.slice(0, 5).map((a) => a.minutes || 0) }],
   };
 
+  // LOADING
   if (loading) {
     return (
       <View style={styles.loader}>
         <ActivityIndicator size="large" color="#00C9A7" />
-        <Text style={styles.loadingText}>Loading dashboard...</Text>
+        <Text style={styles.loadingText}>Loading devices...</Text>
       </View>
     );
   }
@@ -114,9 +143,10 @@ export default function Parent() {
     <ScrollView style={styles.container}>
       <Text style={styles.header}>GuardianNest</Text>
 
-      {/* 🔗 ADD CHILD */}
+      {/* ADD DEVICE */}
       <View style={styles.card}>
         <Text style={styles.title}>Add Device</Text>
+
         <TextInput
           placeholder="Enter child code"
           placeholderTextColor="#888"
@@ -124,25 +154,25 @@ export default function Parent() {
           onChangeText={setCode}
           style={styles.input}
         />
+
         <TouchableOpacity style={styles.button} onPress={linkChild}>
-          <Text style={styles.buttonText}>Link Device</Text>
+          <Text style={styles.buttonText}>Link</Text>
         </TouchableOpacity>
       </View>
 
-      {/* ❌ NO CHILD */}
+      {/* NO DEVICES */}
       {children.length === 0 && (
         <View style={styles.emptyBox}>
           <Text style={styles.emptyTitle}>No devices connected</Text>
           <Text style={styles.emptySub}>
-            Add a child device to start monitoring
+            Add a child device to begin tracking
           </Text>
         </View>
       )}
 
-      {/* ✅ DASHBOARD */}
       {children.length > 0 && (
         <>
-          {/* CHILD TABS */}
+          {/* CHILD SWITCH */}
           <ScrollView horizontal showsHorizontalScrollIndicator={false}>
             {children.map((c) => (
               <TouchableOpacity
@@ -174,11 +204,21 @@ export default function Parent() {
 
           {/* TOTAL */}
           <View style={styles.statCard}>
-            <Text style={styles.statLabel}>Total Screen Time</Text>
+            <Text style={styles.statLabel}>Screen Time</Text>
             <Text style={styles.statValue}>
-              {(totalMinutes / 60).toFixed(1)} hrs
+              {(total / 60).toFixed(1)} hrs
             </Text>
           </View>
+
+          {/* TOP APP */}
+          {topApp && (
+            <View style={styles.card}>
+              <Text style={styles.title}>Most Used App</Text>
+              <Text style={styles.highlight}>
+                {topApp.split(".").pop()}
+              </Text>
+            </View>
+          )}
 
           {/* CHART */}
           <View style={styles.card}>
@@ -189,7 +229,7 @@ export default function Parent() {
                 data={chartData}
                 width={width - 40}
                 height={220}
-                yAxisLabel=""
+                yAxisLabel=""  // ✅ FIX
                 yAxisSuffix="m"
                 fromZero
                 chartConfig={{
@@ -202,6 +242,8 @@ export default function Parent() {
                 }}
                 style={{ borderRadius: 10 }}
               />
+            ) : dataLoading ? (
+              <ActivityIndicator color="#00C9A7" />
             ) : (
               <Text style={styles.emptySub}>No usage yet</Text>
             )}
@@ -287,9 +329,7 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
 
-  statLabel: {
-    color: "#000",
-  },
+  statLabel: { color: "#000" },
 
   statValue: {
     color: "#000",
@@ -301,6 +341,12 @@ const styles = StyleSheet.create({
     color: "#fff",
     marginBottom: 10,
     fontWeight: "600",
+  },
+
+  highlight: {
+    color: "#00C9A7",
+    fontSize: 20,
+    fontWeight: "bold",
   },
 
   input: {
@@ -361,9 +407,7 @@ const styles = StyleSheet.create({
     borderBottomColor: "#1f3f4a",
   },
 
-  appName: {
-    color: "#fff",
-  },
+  appName: { color: "#fff" },
 
   appTime: {
     color: "#00C9A7",
